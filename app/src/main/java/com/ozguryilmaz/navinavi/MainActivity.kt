@@ -7,6 +7,8 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -21,9 +23,12 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import java.util.Locale
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
@@ -39,8 +44,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var updateButton: Button
     private lateinit var updateStatus: TextView
+    private val tomtom by lazy { TomTomApi(apiKeys) }
+    private lateinit var searchBox: EditText
+    private lateinit var routeRow: View
+    private lateinit var routeInfo: TextView
     private var map: MapLibreMap? = null
     private var style: Style? = null
+    private var routeLayer: RouteLayer? = null
+    private var route: Route? = null
 
     private val locationPermission = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -62,6 +73,16 @@ class MainActivity : AppCompatActivity() {
         updateButton.setOnClickListener { update() }
         findViewById<Button>(R.id.key_button).setOnClickListener { askTomtomKey() }
         findViewById<View>(R.id.my_location).setOnClickListener { followMe() }
+        searchBox = findViewById(R.id.search)
+        searchBox.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                search(searchBox.text.toString())
+                true
+            } else false
+        }
+        routeRow = findViewById(R.id.route_row)
+        routeInfo = findViewById(R.id.route_info)
+        findViewById<Button>(R.id.clear_route).setOnClickListener { clearRoute() }
         applySystemBarInsets()
 
         mapView.onCreate(savedInstanceState)
@@ -75,8 +96,13 @@ class MainActivity : AppCompatActivity() {
             if (firstStart) {
                 m.cameraPosition = CameraPosition.Builder().target(LatLng(39.0, 35.0)).zoom(5.0).build()
             }
+            m.addOnMapLongClickListener { p ->
+                routeTo(Place(getString(R.string.long_press_point), "", p))
+                true
+            }
             m.setStyle(Style.Builder().fromUri(MAP_STYLE_URL)) { s ->
                 style = s
+                routeLayer = RouteLayer(s)
                 if (hasLocationPermission()) enableLocation(follow = firstStart) else requestLocationPermission()
             }
         }
@@ -145,6 +171,99 @@ class MainActivity : AppCompatActivity() {
         lc.cameraMode = CameraMode.TRACKING_GPS
         // Kullanıcı zaten yakınlaştırdıysa yakınlığına dokunma.
         if ((map?.cameraPosition?.zoom ?: 0.0) < 14.0) lc.zoomWhileTracking(16.0)
+    }
+
+    private fun currentLocation(): LatLng? {
+        val lc = map?.locationComponent ?: return null
+        if (!lc.isLocationComponentActivated) return null
+        val l = lc.lastKnownLocation ?: return null
+        return LatLng(l.latitude, l.longitude)
+    }
+
+    private fun hideKeyboard() {
+        getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(searchBox.windowToken, 0)
+        searchBox.clearFocus()
+    }
+
+    private fun search(query: String) {
+        if (query.isBlank()) return
+        hideKeyboard()
+        lifecycleScope.launch {
+            try {
+                val places = tomtom.search(query, near = currentLocation())
+                if (places.isEmpty()) {
+                    Toast.makeText(this@MainActivity, R.string.no_results, Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val labels = places.map { if (it.address.isEmpty()) it.name else "${it.name}\n${it.address}" }
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle(query)
+                    .setItems(labels.toTypedArray()) { _, i -> routeTo(places[i]) }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            } catch (e: Exception) {
+                showError(e)
+            }
+        }
+    }
+
+    private fun routeTo(place: Place) {
+        val from = currentLocation()
+        if (from == null) {
+            Toast.makeText(this, R.string.no_location_yet, Toast.LENGTH_LONG).show()
+            return
+        }
+        routeLayer?.showDestination(place.position)
+        routeRow.visibility = View.VISIBLE
+        routeInfo.text = "Rota hesaplanıyor…"
+        lifecycleScope.launch {
+            try {
+                val r = tomtom.route(from, place.position)
+                route = r
+                routeLayer?.showRoute(r.points)
+                routeInfo.text = "${place.name}\n${formatSummary(r)}"
+                fitRoute(r)
+            } catch (e: Exception) {
+                routeInfo.text = place.name
+                showError(e)
+            }
+        }
+    }
+
+    private fun fitRoute(r: Route) {
+        val m = map ?: return
+        if (r.points.size < 2) return
+        // Kamera konum takibindeyse rotayı göstermek için takibi bırak.
+        if (m.locationComponent.isLocationComponentActivated) m.locationComponent.cameraMode = CameraMode.NONE
+        val bounds = LatLngBounds.Builder().includes(r.points).build()
+        val pad = (48 * resources.displayMetrics.density).toInt()
+        val topPanel = findViewById<View>(R.id.top_panel)
+        m.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, pad, topPanel.bottom + pad, pad, pad * 2), 800)
+    }
+
+    private fun clearRoute() {
+        route = null
+        routeLayer?.clear()
+        routeRow.visibility = View.GONE
+        searchBox.text.clear()
+    }
+
+    private fun formatSummary(r: Route): String {
+        val km = if (r.lengthMeters >= 10_000) "${r.lengthMeters / 1000} km"
+        else String.format(Locale("tr", "TR"), "%.1f km", r.lengthMeters / 1000.0)
+        val delayMin = r.trafficDelaySeconds / 60
+        val traffic = if (delayMin > 0) " (trafik +$delayMin dk)" else ""
+        return "$km · ${formatDuration(r.travelTimeSeconds)}$traffic"
+    }
+
+    private fun formatDuration(seconds: Int): String {
+        val min = (seconds + 30) / 60
+        return if (min < 60) "$min dk" else "${min / 60} sa ${min % 60} dk"
+    }
+
+    private fun showError(e: Exception) {
+        val msg = if (e is TomTomException) e.message else "Beklenmeyen hata: ${e.message}"
+        AlertDialog.Builder(this).setMessage(msg).setPositiveButton(android.R.string.ok, null).show()
     }
 
     private fun showStatus() {

@@ -3,6 +3,11 @@
     <string name="update">Güncelle</string>
     <string name="key_change">Anahtar</string>
     <string name="my_location">Konumuma git</string>
+    <string name="search_hint">Nereye gidiyoruz?</string>
+    <string name="clear_route">Temizle</string>
+    <string name="no_location_yet">Konumunuz henüz bulunamadı, birkaç saniye bekleyip tekrar deneyin.</string>
+    <string name="no_results">Sonuç bulunamadı.</string>
+    <string name="long_press_point">Haritada seçilen nokta</string>
     <string name="location_denied">Konum izni verilmedi. Haritada konumunuzu göstermek için Ayarlar → Uygulamalar → NaviNavi → İzinler\'den konuma izin verin.</string>
     <string name="key_dialog_title">TomTom API anahtarı</string>
     <string name="key_dialog_message">developer.tomtom.com → Dashboard → API Keys sayfasından anahtarı kopyalayıp buraya yapıştırın. Sadece bu telefonda saklanır.</string>
