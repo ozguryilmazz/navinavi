@@ -14,7 +14,9 @@ import java.net.URLDecoder
  */
 object GoogleMapsLink {
 
-    private val urlRegex = Regex("https?://\\S+")
+    // Sadece geçerli URL karakterleri: paylaşım metninde bağlantının arkasına
+    // görünmez karakterler (ör. yön işaretleri) eklenebiliyor.
+    private val urlRegex = Regex("https?://[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]+")
     private const val NUM = "(-?\\d{1,3}\\.\\d+)"
 
     // Öncelik sırasıyla: yerin kendi koordinatı, sorgu parametresi, harita görünümünün ortası.
@@ -45,41 +47,55 @@ object GoogleMapsLink {
 
     private fun placeNameFrom(url: String): String? =
         Regex("/place/([^/@?]+)").find(url)?.groupValues?.get(1)
-            ?.let { URLDecoder.decode(it.replace("+", "%20"), "UTF-8") }
+            ?.let { runCatching { URLDecoder.decode(it.replace("+", "%20"), "UTF-8") }.getOrNull() }
             ?.takeIf { it.isNotBlank() && parseCoords("/place/$it") == null }
 
     private const val FALLBACK_NAME = "Google Haritalar'dan paylaşılan yer"
 
-    suspend fun resolve(sharedText: String): Place? = withContext(Dispatchers.IO) {
-        val link = findLink(sharedText) ?: return@withContext null
+    /** Sonuç ve, başarısız olursa kullanıcıya gösterilecek adım adım kayıt. */
+    data class Result(val place: Place?, val log: String)
+
+    suspend fun resolve(sharedText: String): Result = withContext(Dispatchers.IO) {
+        val log = StringBuilder()
+        val link = findLink(sharedText) ?: return@withContext Result(null, "Bağlantı yok")
         val textName = nameFrom(sharedText)
 
         var url = link
         // Yeni Google Haritalar sürümleri sadece bağlantı paylaşıyor; ad o zaman adresten alınır.
         val name = { if (textName == FALLBACK_NAME) placeNameFrom(url) ?: textName else textName }
-        repeat(MAX_REDIRECTS) {
-            parseCoords(url)?.let { return@withContext Place(name(), "", it) }
-            val conn = open(url)
-            try {
-                val code = conn.responseCode
-                val location = conn.getHeaderField("Location")
-                if (code in 300..399 && location != null) {
-                    url = unwrapConsent(URL(URL(url), location).toString())
-                } else {
-                    // Yönlendirme bitti; koordinat adreste yoksa sayfanın içinde ara.
-                    val body = if (code == 200) conn.inputStream.bufferedReader().use { it.readText() } else ""
-                    val coords = htmlPatterns.firstNotNullOfOrNull { p -> p.find(body)?.let { toLatLng(it) } }
-                    return@withContext coords?.let { Place(name(), "", it) }
+        try {
+            repeat(MAX_REDIRECTS) {
+                log.appendLine("→ ${url.take(120)}")
+                parseCoords(url)?.let { return@withContext Result(Place(name(), "", it), log.toString()) }
+                val conn = open(url)
+                try {
+                    val code = conn.responseCode
+                    val location = conn.getHeaderField("Location")
+                    log.appendLine("   HTTP $code")
+                    if (code in 300..399 && location != null) {
+                        url = unwrapConsent(URL(URL(url), location).toString())
+                    } else {
+                        // Yönlendirme bitti; koordinat adreste yoksa sayfanın içinde ara.
+                        val body = if (code == 200) conn.inputStream.bufferedReader().use { it.readText() } else ""
+                        val coords = (coordPatterns + htmlPatterns)
+                            .firstNotNullOfOrNull { p -> p.find(body)?.let { toLatLng(it) } }
+                        if (coords == null) log.appendLine("   Sayfada koordinat yok (${body.length} karakter)")
+                        return@withContext Result(coords?.let { Place(name(), "", it) }, log.toString())
+                    }
+                } finally {
+                    conn.disconnect()
                 }
-            } finally {
-                conn.disconnect()
             }
+            log.appendLine("Çok fazla yönlendirme")
+        } catch (e: Exception) {
+            log.appendLine("Hata: ${e.javaClass.simpleName}: ${e.message}")
         }
-        null
+        Result(null, log.toString())
     }
 
     fun parseCoords(url: String): LatLng? {
-        val decoded = URLDecoder.decode(url, "UTF-8")
+        // Bozuk % dizisi varsa çözmeden dene.
+        val decoded = try { URLDecoder.decode(url, "UTF-8") } catch (e: IllegalArgumentException) { url }
         return coordPatterns.firstNotNullOfOrNull { p -> p.find(decoded)?.let { toLatLng(it) } }
     }
 

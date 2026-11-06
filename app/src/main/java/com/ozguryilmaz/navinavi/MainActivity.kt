@@ -137,20 +137,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleShare(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND) return
-        val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
+        // Bazı uygulamalar metni String değil CharSequence olarak gönderir.
+        val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString() ?: return
         if (GoogleMapsLink.findLink(text) == null) {
             showError(TomTomException(getString(R.string.share_no_link)))
             return
         }
         Toast.makeText(this, R.string.share_resolving, Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
-            val place = try {
-                GoogleMapsLink.resolve(text)
-            } catch (e: Exception) {
-                null
-            }
+            val result = GoogleMapsLink.resolve(text)
+            val place = result.place
             if (place == null) {
-                showError(TomTomException(getString(R.string.share_no_coords)))
+                // Sorunu bulabilmek için ayrıntıyı da göster.
+                val detail = "Paylaşılan metin:\n${text.take(300)}\n\n${result.log.take(1200)}"
+                showError(TomTomException(getString(R.string.share_no_coords) + "\n\n" + detail))
                 return@launch
             }
             suppressSearch = true
