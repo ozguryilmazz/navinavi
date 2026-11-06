@@ -64,6 +64,8 @@ class MainActivity : AppCompatActivity() {
     private var style: Style? = null
     private var routeLayer: RouteLayer? = null
     private var route: Route? = null
+    private var destination: Place? = null
+    private val favorites by lazy { Favorites(this) }
 
     private val locationPermission = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -97,9 +99,14 @@ class MainActivity : AppCompatActivity() {
         searchBox.doAfterTextChanged { text ->
             if (!suppressSearch) onSearchTextChanged(text?.toString().orEmpty())
         }
+        // Boş kutuya dokununca favoriler listelenir.
+        searchBox.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus && searchBox.text.isBlank()) showSuggestions(emptyList(), "")
+        }
         routeRow = findViewById(R.id.route_row)
         routeInfo = findViewById(R.id.route_info)
         findViewById<Button>(R.id.clear_route).setOnClickListener { clearRoute() }
+        findViewById<Button>(R.id.save_favorite).setOnClickListener { askFavoriteName() }
         applySystemBarInsets()
 
         mapView.onCreate(savedInstanceState)
@@ -146,8 +153,15 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, R.string.share_resolving, Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             val result = GoogleMapsLink.resolve(text)
-            val place = result.place ?: result.addressHint?.let { geocodeApprox(it) }
+            val place = result.place
             if (place == null) {
+                // Adresten bulunan konum yanlış yere rota çizdirmesin: sadece bölgeyi göster,
+                // kullanıcı tam yeri basılı tutarak seçsin.
+                val approx = result.addressHint?.let { geocodeApprox(it) }
+                if (approx != null) {
+                    showApproxArea(approx.position)
+                    return@launch
+                }
                 // Sorunu bulabilmek için ayrıntıyı da göster.
                 val detail = "Paylaşılan metin:\n${text.take(300)}\n\n${result.log.take(1200)}"
                 showError(TomTomException(getString(R.string.share_no_coords) + "\n\n" + detail))
@@ -156,7 +170,7 @@ class MainActivity : AppCompatActivity() {
             suppressSearch = true
             searchBox.setText(place.name)
             suppressSearch = false
-            showSuggestions(emptyList(), "")
+            hideSuggestions()
             // Uygulama yeni açıldıysa konum birkaç saniye sonra gelir; o zamana kadar bekle.
             var waited = 0L
             while (currentLocation() == null && waited < LOCATION_WAIT_MS) {
@@ -249,12 +263,57 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 return null
             }
-            if (found != null) {
-                return found.copy(name = "${address.substringBefore(",")} (yaklaşık konum)")
-            }
+            if (found != null) return found
             parts = parts.drop(1)
         }
         return null
+    }
+
+    private fun showApproxArea(p: LatLng) {
+        val m = map ?: return
+        if (m.locationComponent.isLocationComponentActivated) m.locationComponent.cameraMode = CameraMode.NONE
+        m.animateCamera(CameraUpdateFactory.newLatLngZoom(p, 14.0), 800)
+        AlertDialog.Builder(this).setMessage(R.string.share_approx).setPositiveButton(android.R.string.ok, null).show()
+    }
+
+    private fun askFavoriteName() {
+        val place = destination ?: return
+        val input = EditText(this).apply {
+            hint = getString(R.string.favorite_dialog_hint)
+            isSingleLine = true
+            // Haritadan seçilen noktanın genel adı yerine boş başlasın.
+            if (place.name != getString(R.string.long_press_point)) setText(place.name)
+        }
+        val padding = (20 * resources.displayMetrics.density).toInt()
+        val container = FrameLayout(this).apply {
+            setPadding(padding, 0, padding, 0)
+            addView(input)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.favorite_dialog_title)
+            .setView(container)
+            .setPositiveButton(R.string.save) { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isNotEmpty()) {
+                    favorites.save(name, place.position)
+                    destination = place.copy(name = name)
+                    Toast.makeText(this, R.string.favorite_saved, Toast.LENGTH_LONG).show()
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmDeleteFavorite(p: Place) {
+        AlertDialog.Builder(this)
+            .setMessage(getString(R.string.favorite_delete, p.name))
+            .setPositiveButton(R.string.delete) { _, _ ->
+                favorites.remove(p.name)
+                val query = searchBox.text.toString().trim()
+                showSuggestions(PlaceMatcher.filter(query, lastResults), query)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun hideKeyboard() {
@@ -298,23 +357,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Öneri listesi: önce eşleşen favoriler (kutu boşsa hepsi), sonra TomTom sonuçları.
+     * Favoriler 1 harften itibaren, TomTom sonuçları 3 harften itibaren gösterilir.
+     */
     private fun showSuggestions(places: List<Place>, query: String, searched: Boolean = false, message: String? = null) {
         suggestions.removeAllViews()
-        if (query.length < MIN_SEARCH_CHARS || (places.isEmpty() && !searched)) {
+        val favs = if (query.isEmpty()) favorites.all() else PlaceMatcher.filter(query, favorites.all(), max = 3)
+        val api = if (query.length >= MIN_SEARCH_CHARS) places.filterNot { p -> favs.any { it.name == p.name } } else emptyList()
+        val showMessage = searched && api.isEmpty() && query.length >= MIN_SEARCH_CHARS
+        if (favs.isEmpty() && api.isEmpty() && !showMessage) {
             suggestions.visibility = View.GONE
             return
         }
         suggestions.visibility = View.VISIBLE
         val pad = (8 * resources.displayMetrics.density).toInt()
-        if (places.isEmpty()) {
-            suggestions.addView(TextView(this).apply {
-                text = message ?: getString(R.string.no_results)
-                setTextColor(0xFF757575.toInt())
-                setPadding(pad, pad, pad, pad)
-            })
-            return
-        }
-        for (p in places) {
+        for (p in favs + api) {
             suggestions.addView(TextView(this).apply {
                 text = if (p.address.isEmpty()) p.name else "${p.name}\n${p.address}"
                 setTextColor(0xFF212121.toInt())
@@ -322,8 +380,24 @@ class MainActivity : AppCompatActivity() {
                 setPadding(pad, pad, pad, pad)
                 setBackgroundResource(android.R.drawable.list_selector_background)
                 setOnClickListener { pickPlace(p) }
+                // Favoriye uzun basınca silme sorulur.
+                if (p.address == Favorites.FAVORITE_MARK) {
+                    setOnLongClickListener { confirmDeleteFavorite(p); true }
+                }
             })
         }
+        if (showMessage && favs.isEmpty()) {
+            suggestions.addView(TextView(this).apply {
+                text = message ?: getString(R.string.no_results)
+                setTextColor(0xFF757575.toInt())
+                setPadding(pad, pad, pad, pad)
+            })
+        }
+    }
+
+    private fun hideSuggestions() {
+        suggestions.removeAllViews()
+        suggestions.visibility = View.GONE
     }
 
     private fun pickPlace(p: Place) {
@@ -331,7 +405,7 @@ class MainActivity : AppCompatActivity() {
         suppressSearch = true
         searchBox.setText(p.name)
         suppressSearch = false
-        showSuggestions(emptyList(), "")
+        hideSuggestions()
         hideKeyboard()
         routeTo(p)
     }
@@ -342,6 +416,8 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.no_location_yet, Toast.LENGTH_LONG).show()
             return
         }
+        destination = place
+        hideSuggestions()
         routeLayer?.showDestination(place.position)
         routeRow.visibility = View.VISIBLE
         routeInfo.text = "Rota hesaplanıyor…"
@@ -373,11 +449,12 @@ class MainActivity : AppCompatActivity() {
     private fun clearRoute() {
         route = null
         routeLayer?.clear()
+        destination = null
         routeRow.visibility = View.GONE
         suppressSearch = true
         searchBox.text.clear()
         suppressSearch = false
-        showSuggestions(emptyList(), "")
+        hideSuggestions()
     }
 
     private fun formatSummary(r: Route): String {
