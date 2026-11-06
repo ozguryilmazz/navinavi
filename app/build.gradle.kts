@@ -4,7 +4,8 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
-// Gizli değerler önce ortam değişkeninden (GitHub Actions), yoksa local.properties'ten okunur.
+// TomTom anahtarı APK'ya gömülmez; kullanıcı uygulamada bir kez girer (bkz. ApiKeys.kt).
+// İmza bilgileri önce ortam değişkeninden (GitHub Actions), yoksa local.properties'ten okunur.
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
@@ -12,7 +13,6 @@ val localProps = Properties().apply {
 fun secret(name: String): String? =
     System.getenv(name)?.takeIf { it.isNotBlank() } ?: localProps.getProperty(name)?.takeIf { it.isNotBlank() }
 
-val tomtomKey = secret("TOMTOM_API_KEY") ?: ""
 val keystorePath = secret("KEYSTORE_PATH")
 val keystorePassword = secret("KEYSTORE_PASSWORD")
 val hasKeystore = keystorePath != null && keystorePassword != null && file(keystorePath).exists()
@@ -31,7 +31,7 @@ android {
         versionCode = buildNumber
         versionName = "0.1.$buildNumber"
 
-        buildConfigField("String", "TOMTOM_API_KEY", "\"$tomtomKey\"")
+        buildConfigField("String", "GITHUB_REPO", "\"ozguryilmazz/navinavi\"")
     }
 
     signingConfigs {
@@ -64,12 +64,10 @@ android {
 if (!hasKeystore) {
     logger.warn("UYARI: Sabit imza anahtarı bulunamadı, varsayılan debug imzası kullanılıyor.")
 }
-if (tomtomKey.isEmpty()) {
-    logger.warn("UYARI: TOMTOM_API_KEY tanımlı değil.")
-}
 
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
 }

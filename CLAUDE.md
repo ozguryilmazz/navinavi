@@ -41,14 +41,15 @@ Araç için, **ağırlıklı olarak Android Auto** üzerinden kullanılacak kiş
 - Gereksiz istekten kaçın: yeniden rota için hız sınırı koy (ör. en fazla 20 sn'de bir).
 
 ## API anahtarı — GÜVENLİK
-- Anahtar **asla** koda, bu dosyaya ya da repoya yazılmaz.
-- GitHub repo ayarlarında **Secret** olarak eklenecek: `TOMTOM_API_KEY`
-- Gradle, anahtarı ortam değişkeninden ya da `local.properties`'ten okuyup `BuildConfig.TOMTOM_API_KEY` olarak üretmeli. `local.properties` `.gitignore`'da olmalı.
-- Kullanıcıya Secret eklemeyi adım adım anlat (Settings → Secrets and variables → Actions → New repository secret).
+- Anahtar **asla** koda, bu dosyaya, repoya ya da **APK'ya** yazılmaz.
+- **Karar (değişti):** Repo herkese açık ve APK'lar herkese açık GitHub Release'te yayımlanıyor. Bu yüzden anahtar `BuildConfig`'e gömülmez; kullanıcı ilk açılışta uygulamaya bir kez yapıştırır, `ApiKeys` (SharedPreferences) içinde telefonda saklanır. `TOMTOM_API_KEY` Secret'ı kaldırıldı.
+- APK'ya hiçbir token/anahtar gömme (GitHub token dahil).
 
 ## GitHub Actions
 - Her push'ta debug APK derle, artifact olarak yükle.
-- **Sabit imza anahtarı** kullan (keystore Base64 olarak Secret'ta), böylece yeni APK eskisinin üstüne kurulabilir, veriler silinmez.
+- **Sabit imza anahtarı** kullan (Secret'lar: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`; alias `navinavi`), böylece yeni APK eskisinin üstüne kurulabilir, veriler silinmez. Keystore kullanıcının bilgisayarında `imza/` klasöründe (gitignore'da).
+- `main` derlemeleri sabit imza varsa `b<run_number>` etiketiyle GitHub Release olarak yayımlanır. versionCode = run_number.
+- **Uygulama içi güncelleme:** "Güncelle" butonu `releases/latest`'i okur, daha yeniyse APK'yı indirip yükleyiciyi açar (`Updater.kt`). Kullanıcı ilk APK'yı elle kurar, sonrakiler butonla gelir.
 - Kullanıcı daha önce başka projelerde (Fetih, Relic) GitHub Actions ile APK almış; aynı mantık.
 
 ## Android Auto'da kurulum (kullanıcıya anlatılacak)
@@ -120,7 +121,7 @@ Kullanıcı "espirili ses kayıtları olur" dedi. Öneri listesi:
 - Ekranda her zaman **"Tahmini yeşil: ~23 sn"** gibi "tahmini" ibaresiyle göster.
 
 ## Yol haritası
-1. **Proje iskeleti:** Kotlin Android projesi, Gradle, `.gitignore`, `BuildConfig` ile anahtar, GitHub Actions ile imzalı APK
+1. **Proje iskeleti:** Kotlin Android projesi, Gradle, `.gitignore`, uygulamada girilen anahtar, GitHub Actions ile imzalı APK
 2. Telefonda MapLibre haritası + anlık konum
 3. TomTom ile hedef arama ve rota çizme
 4. Adım adım yön tarifi, rotadan çıkınca yeniden rota
@@ -131,6 +132,6 @@ Kullanıcı "espirili ses kayıtları olur" dedi. Öneri listesi:
 
 ## Claude Code'a ilk görev
 1. Önce bu dosyayı repoya `CLAUDE.md` olarak ekle.
-2. Kullanıcıdan TomTom anahtarını GitHub Secret olarak eklemesini iste (anahtarı sohbete yazmasını isteme).
+2. TomTom anahtarını kullanıcı uygulamaya kendisi girer (anahtarı sohbete yazmasını isteme).
 3. 1. adımı (proje iskeleti + GitHub Actions) yap ve ilk APK'nın derlendiğini doğrula.
 4. Sonra 2. adıma geç; her aşama sonunda kullanıcıya telefonda neyi test edeceğini kısaca söyle.

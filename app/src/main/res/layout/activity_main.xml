@@ -20,4 +20,27 @@
         android:layout_marginTop="16dp"
         android:gravity="center"
         android:textSize="16sp" />
+
+    <Button
+        android:id="@+id/key_button"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/key_change" />
+
+    <Button
+        android:id="@+id/update_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="32dp"
+        android:text="@string/update" />
+
+    <TextView
+        android:id="@+id/update_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center"
+        android:textSize="14sp" />
 </LinearLayout>

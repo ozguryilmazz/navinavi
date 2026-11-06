@@ -1,3 +1,10 @@
 <resources>
     <string name="app_name">NaviNavi</string>
+    <string name="update">Güncelle</string>
+    <string name="key_change">TomTom anahtarını değiştir</string>
+    <string name="key_dialog_title">TomTom API anahtarı</string>
+    <string name="key_dialog_message">developer.tomtom.com → Dashboard → API Keys sayfasından anahtarı kopyalayıp buraya yapıştırın. Sadece bu telefonda saklanır.</string>
+    <string name="key_dialog_hint">Anahtarı yapıştırın</string>
+    <string name="save">Kaydet</string>
+    <string name="cancel">Vazgeç</string>
 </resources>
