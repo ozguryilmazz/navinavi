@@ -77,6 +77,7 @@ class MainActivity : AppCompatActivity() {
     private val offRoute = OffRouteDetector()
     private var navigating = false
     private var rerouting = false
+    private var movedOnce = false
     private lateinit var startNavButton: Button
     // Android 10 ve öncesinde bu metotların hepsi zorunlu; lambda yazılırsa çöker.
     private val navLocationListener = object : LocationListener {
@@ -252,7 +253,8 @@ class MainActivity : AppCompatActivity() {
             )
         }
         lc.isLocationComponentEnabled = true
-        lc.renderMode = RenderMode.GPS
+        // Navigasyon dışında ok pusulayı izler: telefonu çevirince döner.
+        lc.renderMode = RenderMode.COMPASS
         if (follow) followMe()
     }
 
@@ -268,7 +270,11 @@ class MainActivity : AppCompatActivity() {
             enableLocation()
             return
         }
-        lc.cameraMode = CameraMode.TRACKING_GPS
+        lc.cameraMode = when {
+            !navigating -> CameraMode.TRACKING // kuzey yukarıda, sadece konumu izle
+            movedOnce -> CameraMode.TRACKING_GPS
+            else -> CameraMode.TRACKING_COMPASS
+        }
         // Kullanıcı zaten yakınlaştırdıysa yakınlığına dokunma.
         if ((map?.cameraPosition?.zoom ?: 0.0) < 14.0) lc.zoomWhileTracking(16.0)
     }
@@ -507,7 +513,10 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Kamera arabanın arkasından, gidiş yönüne dönük ve eğik baksın; araç ekranın alt tarafında dursun.
-        lc.cameraMode = CameraMode.TRACKING_GPS
+        // GPS yönü ancak hareket ederken bilinir; araç ilk kez hızlanana kadar pusula kullanılır.
+        movedOnce = false
+        lc.renderMode = RenderMode.COMPASS
+        lc.cameraMode = CameraMode.TRACKING_COMPASS
         lc.zoomWhileTracking(17.0)
         lc.tiltWhileTracking(45.0)
         lc.paddingWhileTracking(doubleArrayOf(0.0, mapView.height * 0.4, 0.0, 0.0))
@@ -538,6 +547,7 @@ class MainActivity : AppCompatActivity() {
             if (lc.isLocationComponentActivated) {
                 lc.paddingWhileTracking(doubleArrayOf(0.0, 0.0, 0.0, 0.0))
                 lc.tiltWhileTracking(0.0)
+                lc.renderMode = RenderMode.COMPASS
             }
         }
         if (arrived) {
@@ -549,6 +559,14 @@ class MainActivity : AppCompatActivity() {
     private fun onNavLocation(location: Location) {
         val nav = navigator ?: return
         if (!navigating || rerouting) return
+        // İlk gerçek harekette GPS yönüne geç: arabada pusula titrer, GPS yönü kırmızı ışıkta da sabit kalır.
+        if (!movedOnce && location.hasBearing() && location.hasSpeed() && location.speed > MOVING_SPEED_MPS) {
+            movedOnce = true
+            map?.locationComponent?.let {
+                it.renderMode = RenderMode.GPS
+                it.cameraMode = CameraMode.TRACKING_GPS
+            }
+        }
         val p = nav.update(LatLng(location.latitude, location.longitude))
 
         if (p.arrived) {
@@ -727,5 +745,6 @@ class MainActivity : AppCompatActivity() {
         const val MIN_SEARCH_CHARS = 3
         const val SEARCH_DEBOUNCE_MS = 400L
         const val LOCATION_WAIT_MS = 20_000L
+        const val MOVING_SPEED_MPS = 2.5f // ~9 km/sa
     }
 }
