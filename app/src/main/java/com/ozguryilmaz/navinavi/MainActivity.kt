@@ -69,11 +69,15 @@ class MainActivity : AppCompatActivity() {
             map = m
             // Logo/telif yazısı boşluklarının harita hazır olunca da uygulanması için.
             ViewCompat.requestApplyInsets(findViewById(R.id.root))
-            // Konum gelene kadar Türkiye'nin ortası.
-            m.cameraPosition = CameraPosition.Builder().target(LatLng(39.0, 35.0)).zoom(5.0).build()
+            // Ekran yeniden oluşturulduysa MapView eski kamerayı kendisi geri yükler;
+            // ilk açılışta konum gelene kadar Türkiye'nin ortası.
+            val firstStart = savedInstanceState == null
+            if (firstStart) {
+                m.cameraPosition = CameraPosition.Builder().target(LatLng(39.0, 35.0)).zoom(5.0).build()
+            }
             m.setStyle(Style.Builder().fromUri(MAP_STYLE_URL)) { s ->
                 style = s
-                if (hasLocationPermission()) enableLocation() else requestLocationPermission()
+                if (hasLocationPermission()) enableLocation(follow = firstStart) else requestLocationPermission()
             }
         }
 
@@ -110,7 +114,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun enableLocation() {
+    private fun enableLocation(follow: Boolean = true) {
         val m = map ?: return
         val s = style ?: return
         val lc = m.locationComponent
@@ -123,7 +127,7 @@ class MainActivity : AppCompatActivity() {
         }
         lc.isLocationComponentEnabled = true
         lc.renderMode = RenderMode.GPS
-        followMe()
+        if (follow) followMe()
     }
 
     /** Kamerayı konuma kilitler; kullanıcı haritayı kaydırınca kilit kendiliğinden açılır. */
@@ -139,7 +143,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
         lc.cameraMode = CameraMode.TRACKING_GPS
-        lc.zoomWhileTracking(16.0)
+        // Kullanıcı zaten yakınlaştırdıysa yakınlığına dokunma.
+        if ((map?.cameraPosition?.zoom ?: 0.0) < 14.0) lc.zoomWhileTracking(16.0)
     }
 
     private fun showStatus() {
