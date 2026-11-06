@@ -10,6 +10,12 @@ Repo kök dizinine `CLAUDE.md` olarak konulursa Claude Code her oturumda otomati
 - Repo: `ozguryilmazz/navinavi`
 - Uygulamayı **sadece kullanıcı** kullanacak, Play Store'a yüklenmeyecek (APK ile kurulum).
 
+## ASIL AMAÇ (kullanıcı özellikle vurguladı)
+Uygulamanın asıl amacı **rota üzerindeki trafik ışıklarını takip etmek**:
+- İlerideki ışığın **ne kadar süre sonra kırmızı / yeşil yanacağını** söylemek.
+- **Yeşili yakalamak için hız önerisi:** "Hızını ~52 km/sa'ye çıkar" ya da "~38 km/sa'ye yavaşla, yeşile denk gelirsin" gibi (GLOSA mantığı; ayrıntı "Trafik ışığı özelliği" bölümünde).
+Navigasyon (harita, rota, yön tarifi) bunun altyapısı. Karar verirken bu önceliği unutma.
+
 ## Ne yapıyoruz
 Araç için, **ağırlıklı olarak Android Auto** üzerinden kullanılacak kişisel bir navigasyon uygulaması:
 - Hedef arama, rota çizme, adım adım yön tarifi
@@ -120,6 +126,14 @@ Kullanıcı "espirili ses kayıtları olur" dedi. Öneri listesi:
 - Tutarsız ışık (akıllı/değişken kavşak) "değişken" işaretlenir, tahmin gösterilmez.
 - Ekranda her zaman **"Tahmini yeşil: ~23 sn"** gibi "tahmini" ibaresiyle göster.
 
+**Hız önerisi (yeşili yakalama):**
+- Işığa kalan mesafe (rota üzerinden, `Navigator.traveled` ile) ve tahmini yeşil penceresi [yeşil başlangıç, yeşil bitiş] bilinir.
+- Mevcut hızla varış anı yeşil penceredeyse: "Bu hızla yeşile denk geliyorsun".
+- Değilse, pencereye denk gelen hız aralığı = mesafe / pencere süreleri. Bu aralık **yasal hız sınırı** (TomTom rota yanıtındaki hız sınırı ya da OSM `maxspeed`) ile makul bir alt sınır (ör. 20 km/sa) arasında kalıyorsa öner: "~52 km/sa'ye çık" / "~38 km/sa'ye yavaşla".
+- **Asla hız sınırının üstünde hız önerme.** Hiçbir yasal hız yeşili yakalatmıyorsa "Kırmızıya denk geleceksin, ~25 sn bekleme" de.
+- Tahmin güveni düşükse ("yaklaşık" kayıtlar, az veri, "değişken" ışık) hız önerisi verme, sadece süreyi "tahmini" ile göster.
+- Öneri sesli de söylenecek (6. adımdaki kendi ses kayıtlarıyla); sürücüyü sık sık rahatsız etmemek için aynı ışık için en fazla 1–2 kez.
+
 ## Yol haritası
 1. **Proje iskeleti:** Kotlin Android projesi, Gradle, `.gitignore`, uygulamada girilen anahtar, GitHub Actions ile imzalı APK
 2. Telefonda MapLibre haritası + anlık konum
@@ -127,8 +141,22 @@ Kullanıcı "espirili ses kayıtları olur" dedi. Öneri listesi:
 4. Adım adım yön tarifi, rotadan çıkınca yeniden rota
 5. **Android Auto:** Car App Library, harita yüzeyi, `NavigationTemplate`, sıradaki manevra
 6. Ses sistemi + kayıt listesi + muzip anonslar
-7. Trafik ışığı: konum çekme, 🟢/🔴 kayıt, tahmin
+7. Trafik ışığı: konum çekme, 🟢/🔴 kayıt, tahmin, **hız önerisi**
 8. İstatistik, rozetler, araç ikonları
+
+## Durum (2026-11-06 itibarıyla)
+- **1–4. adımlar tamam**; rota ve yön tarifi kullanıcı tarafından araçta denendi. Son sürüm b12'deki ok (pusula/GPS) düzeltmesi henüz denenmedi. Yapılanlar:
+  - İmzalı APK + `b<run>` GitHub Release; uygulama içi **Güncelle** butonu (`Updater.kt`).
+  - TomTom anahtarı uygulamada girilir (`ApiKeys.kt`), APK'da gizli bilgi yok.
+  - MapLibre + OpenFreeMap (`liberty` stili), konum; ekran dönünce kamera korunur (`configChanges`).
+  - Yazdıkça arama (typeahead, 400 ms bekleme, önbellek), isimle eşleşmeyenler elenir (`PlaceMatcher.kt`).
+  - **Google Haritalar'dan Paylaş → NaviNavi** (`GoogleMapsLink.kt`): kısa bağlantının yönlendirmesindeki `!3d..!4d..` koordinatı okunur. Bazı bağlantılarda koordinat yok; o zaman adres TomTom geocode ile bulunup sadece bölge gösterilir (kırsalda çok uzak çıkabiliyor, rota çizilmez).
+  - **Favoriler** (`Favorites.kt`): rotadaki yeri ★ Kaydet; yeşil konum butonuna uzun basınca bulunduğun yeri kaydet; aramada en üstte.
+  - Adım adım yön tarifi (`Navigator.kt`): rotaya izdüşüm, sıradaki manevra, kalan yol/süre/varış; 50 m + 4 sn sapmada yeniden rota (en fazla 20 sn'de bir). Ok: dururken pusula, ~9 km/sa üstünde GPS yönü.
+- **Reddedilen ek kaynaklar:** Yandex (ücretsiz şartlar navigasyon benzeri uygulamayı, sonuçları süzmeyi ve 30 günden uzun saklamayı yasaklıyor; Places API ücretli). TomTom ve OSM'de küçük işletmeler eksik; çözüm Google paylaşımı + favoriler.
+- **Bilinen sınırlama:** Uygulama arka plandayken navigasyon güncellenmiyor → 5. adımda foreground service.
+- **Sıradaki:** 5. adım (Android Auto). Asıl amaç trafik ışığı (7. adım) olduğu için Android Auto'dan sonra sırayı kullanıcıyla konuş; 7. adımı 6'dan önce almak mantıklı olabilir.
+- Yerel derleme yok (bilgisayarda SSL engeli); derleme sadece GitHub Actions'ta. `gh` CLI kurulu değil, durum public API ile `curl` üzerinden okunuyor.
 
 ## Claude Code'a ilk görev
 1. Önce bu dosyayı repoya `CLAUDE.md` olarak ekle.
