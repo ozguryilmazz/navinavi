@@ -9,7 +9,13 @@
     <string name="no_results">Sonuç bulunamadı.</string>
     <string name="long_press_point">Haritada seçilen nokta</string>
     <string name="save_favorite">★ Kaydet</string>
+    <string name="start_nav">Başlat</string>
+    <string name="stop_nav">Bitir</string>
+    <string name="arrived">Hedefe ulaştınız</string>
+    <string name="rerouting">Rota yeniden hesaplanıyor…</string>
+    <string name="gps_waiting">GPS sinyali bekleniyor…</string>
     <string name="favorite_dialog_title">Favori olarak kaydet</string>
+    <string name="favorite_here_title">Bulunduğum yeri kaydet</string>
     <string name="favorite_dialog_hint">Ad (ör. İş, Ev)</string>
     <string name="favorite_saved">Kaydedildi. Arama kutusuna adını yazınca en üstte çıkacak.</string>
     <string name="favorite_delete">\"%1$s\" favorilerden silinsin mi?</string>

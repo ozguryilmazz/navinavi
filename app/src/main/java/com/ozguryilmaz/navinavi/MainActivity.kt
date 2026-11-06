@@ -4,7 +4,12 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Bundle
+import android.os.SystemClock
+import android.view.WindowManager
 import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
@@ -67,6 +72,21 @@ class MainActivity : AppCompatActivity() {
     private var destination: Place? = null
     private val favorites by lazy { Favorites(this) }
 
+    // Navigasyon durumu
+    private var navigator: Navigator? = null
+    private val offRoute = OffRouteDetector()
+    private var navigating = false
+    private var rerouting = false
+    private lateinit var startNavButton: Button
+    // Android 10 ve öncesinde bu metotların hepsi zorunlu; lambda yazılırsa çöker.
+    private val navLocationListener = object : LocationListener {
+        override fun onLocationChanged(location: Location) = onNavLocation(location)
+        override fun onProviderEnabled(provider: String) {}
+        override fun onProviderDisabled(provider: String) {}
+        @Deprecated("Android 10 ve öncesi için")
+        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+    }
+
     private val locationPermission = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { granted ->
@@ -86,7 +106,10 @@ class MainActivity : AppCompatActivity() {
         updateStatus = findViewById(R.id.update_status)
         updateButton.setOnClickListener { update() }
         findViewById<Button>(R.id.key_button).setOnClickListener { askTomtomKey() }
-        findViewById<View>(R.id.my_location).setOnClickListener { followMe() }
+        findViewById<View>(R.id.my_location).apply {
+            setOnClickListener { followMe() }
+            setOnLongClickListener { saveCurrentLocation(); true }
+        }
         searchBox = findViewById(R.id.search)
         suggestions = findViewById(R.id.suggestions)
         // Klavyedeki ara tuşu sadece klavyeyi kapatır; sonuçlar zaten yazarken listeleniyor.
@@ -106,7 +129,10 @@ class MainActivity : AppCompatActivity() {
         routeRow = findViewById(R.id.route_row)
         routeInfo = findViewById(R.id.route_info)
         findViewById<Button>(R.id.clear_route).setOnClickListener { clearRoute() }
-        findViewById<Button>(R.id.save_favorite).setOnClickListener { askFavoriteName() }
+        startNavButton = findViewById(R.id.start_nav)
+        startNavButton.setOnClickListener { startNavigation() }
+        findViewById<Button>(R.id.stop_nav).setOnClickListener { stopNavigation() }
+        findViewById<Button>(R.id.save_favorite).setOnClickListener { destination?.let { askFavoriteName(it) } }
         applySystemBarInsets()
 
         mapView.onCreate(savedInstanceState)
@@ -185,12 +211,16 @@ class MainActivity : AppCompatActivity() {
     private fun applySystemBarInsets() {
         val topPanel = findViewById<View>(R.id.top_panel)
         val fab = findViewById<View>(R.id.my_location)
+        val navPanel = findViewById<View>(R.id.nav_panel)
+        val navBottom = findViewById<View>(R.id.nav_bottom)
         val margin = (12 * resources.displayMetrics.density).toInt()
         val fabMargin = (20 * resources.displayMetrics.density).toInt()
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             topPanel.updateLayoutParams<ViewGroup.MarginLayoutParams> { topMargin = bars.top + margin }
+            navPanel.updateLayoutParams<ViewGroup.MarginLayoutParams> { topMargin = bars.top + margin }
             fab.updateLayoutParams<ViewGroup.MarginLayoutParams> { bottomMargin = bars.bottom + fabMargin }
+            navBottom.updateLayoutParams<ViewGroup.MarginLayoutParams> { bottomMargin = bars.bottom + fabMargin }
             map?.uiSettings?.let {
                 it.setAttributionMargins(it.attributionMarginLeft, 0, 0, bars.bottom + margin)
                 it.setLogoMargins(it.logoMarginLeft, 0, 0, bars.bottom + margin)
@@ -276,8 +306,17 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this).setMessage(R.string.share_approx).setPositiveButton(android.R.string.ok, null).show()
     }
 
-    private fun askFavoriteName() {
-        val place = destination ?: return
+    /** Yeşil konum butonuna uzun basınca: şu an bulunduğum yeri favoriye kaydet (ör. işe varınca "İş"). */
+    private fun saveCurrentLocation() {
+        val here = currentLocation()
+        if (here == null) {
+            Toast.makeText(this, R.string.no_location_yet, Toast.LENGTH_LONG).show()
+            return
+        }
+        askFavoriteName(Place(getString(R.string.long_press_point), "", here), R.string.favorite_here_title)
+    }
+
+    private fun askFavoriteName(place: Place, title: Int = R.string.favorite_dialog_title) {
         val input = EditText(this).apply {
             hint = getString(R.string.favorite_dialog_hint)
             isSingleLine = true
@@ -290,13 +329,13 @@ class MainActivity : AppCompatActivity() {
             addView(input)
         }
         AlertDialog.Builder(this)
-            .setTitle(R.string.favorite_dialog_title)
+            .setTitle(title)
             .setView(container)
             .setPositiveButton(R.string.save) { _, _ ->
                 val name = input.text.toString().trim()
                 if (name.isNotEmpty()) {
                     favorites.save(name, place.position)
-                    destination = place.copy(name = name)
+                    if (destination?.position == place.position) destination = place.copy(name = name)
                     Toast.makeText(this, R.string.favorite_saved, Toast.LENGTH_LONG).show()
                 }
             }
@@ -417,6 +456,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
         destination = place
+        route = null
+        startNavButton.isEnabled = false
         hideSuggestions()
         routeLayer?.showDestination(place.position)
         routeRow.visibility = View.VISIBLE
@@ -427,6 +468,7 @@ class MainActivity : AppCompatActivity() {
                 route = r
                 routeLayer?.showRoute(r.points)
                 routeInfo.text = "${place.name}\n${formatSummary(r)}"
+                startNavButton.isEnabled = true
                 fitRoute(r)
             } catch (e: Exception) {
                 routeInfo.text = place.name
@@ -446,7 +488,130 @@ class MainActivity : AppCompatActivity() {
         m.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, pad, topPanel.bottom + pad, pad, pad * 2), 800)
     }
 
+    // ---- Adım adım navigasyon ----
+
+    @SuppressLint("MissingPermission")
+    private fun startNavigation() {
+        val r = route ?: return
+        val lc = map?.locationComponent ?: return
+        if (!lc.isLocationComponentActivated) return
+        navigator = Navigator(r)
+        navigating = true
+        rerouting = false
+
+        findViewById<View>(R.id.top_panel).visibility = View.GONE
+        findViewById<View>(R.id.nav_panel).visibility = View.VISIBLE
+        findViewById<View>(R.id.nav_bottom).visibility = View.VISIBLE
+        findViewById<TextView>(R.id.nav_text).setText(R.string.gps_waiting)
+        // Navigasyonda ekran kapanmasın.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // Kamera arabanın arkasından, gidiş yönüne dönük ve eğik baksın; araç ekranın alt tarafında dursun.
+        lc.cameraMode = CameraMode.TRACKING_GPS
+        lc.zoomWhileTracking(17.0)
+        lc.tiltWhileTracking(45.0)
+        lc.paddingWhileTracking(doubleArrayOf(0.0, mapView.height * 0.4, 0.0, 0.0))
+
+        val lm = getSystemService(LocationManager::class.java)
+        val provider = if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
+        try {
+            lm.requestLocationUpdates(provider, 1000L, 0f, navLocationListener, mainLooper)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Konum servisi açılamadı: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+        lc.lastKnownLocation?.let { onNavLocation(it) }
+    }
+
+    private fun stopNavigation(arrived: Boolean = false) {
+        if (!navigating) return
+        navigating = false
+        navigator = null
+        getSystemService(LocationManager::class.java).removeUpdates(navLocationListener)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        findViewById<View>(R.id.nav_panel).visibility = View.GONE
+        findViewById<View>(R.id.nav_bottom).visibility = View.GONE
+        findViewById<View>(R.id.top_panel).visibility = View.VISIBLE
+
+        map?.locationComponent?.let { lc ->
+            if (lc.isLocationComponentActivated) {
+                lc.paddingWhileTracking(doubleArrayOf(0.0, 0.0, 0.0, 0.0))
+                lc.tiltWhileTracking(0.0)
+            }
+        }
+        if (arrived) {
+            clearRoute()
+            AlertDialog.Builder(this).setMessage(R.string.arrived).setPositiveButton(android.R.string.ok, null).show()
+        }
+    }
+
+    private fun onNavLocation(location: Location) {
+        val nav = navigator ?: return
+        if (!navigating || rerouting) return
+        val p = nav.update(LatLng(location.latitude, location.longitude))
+
+        if (p.arrived) {
+            stopNavigation(arrived = true)
+            return
+        }
+        if (offRoute.check(p.distanceFromRoute, location.accuracy, SystemClock.elapsedRealtime())) {
+            reroute(LatLng(location.latitude, location.longitude))
+            return
+        }
+        showGuidance(p)
+    }
+
+    private fun showGuidance(p: NavProgress) {
+        val next = p.next
+        findViewById<TextView>(R.id.nav_arrow).text = maneuverArrow(next?.maneuver)
+        findViewById<TextView>(R.id.nav_distance).text = formatDistance(p.distanceToNext)
+        findViewById<TextView>(R.id.nav_text).text = next?.plainText().orEmpty()
+
+        // Sıradaki iki manevra birbirine yakınsa ikincisini de önceden göster.
+        val then = findViewById<TextView>(R.id.nav_then)
+        val after = p.afterNext
+        if (next != null && after != null && after.routeOffsetMeters - next.routeOffsetMeters < 200) {
+            then.text = "Ardından ${maneuverArrow(after.maneuver)} ${after.plainText()}"
+            then.visibility = View.VISIBLE
+        } else {
+            then.visibility = View.GONE
+        }
+
+        val eta = java.time.LocalTime.now().plusSeconds(p.remainingSeconds.toLong())
+        findViewById<TextView>(R.id.nav_summary).text =
+            "${formatDistance(p.remainingMeters)} · ${formatDuration(p.remainingSeconds)} · " +
+                String.format(Locale("tr", "TR"), "%02d:%02d", eta.hour, eta.minute)
+    }
+
+    /** Rotadan çıkıldı: bulunduğum yerden hedefe yeni rota (OffRouteDetector en fazla 20 sn'de bir izin verir). */
+    private fun reroute(from: LatLng) {
+        val dest = destination ?: return
+        rerouting = true
+        findViewById<TextView>(R.id.nav_arrow).text = "⟲"
+        findViewById<TextView>(R.id.nav_distance).text = ""
+        findViewById<TextView>(R.id.nav_text).setText(R.string.rerouting)
+        findViewById<View>(R.id.nav_then).visibility = View.GONE
+        lifecycleScope.launch {
+            try {
+                val r = tomtom.route(from, dest.position)
+                if (!navigating) return@launch
+                route = r
+                navigator = Navigator(r)
+                routeLayer?.showRoute(r.points)
+            } catch (e: Exception) {
+                // Navigasyonu kesme; eski rotayla devam, bir sonraki sapmada tekrar denenir.
+                val msg = if (e is TomTomException) e.message else e.message
+                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+            } finally {
+                rerouting = false
+            }
+        }
+    }
+
     private fun clearRoute() {
+        stopNavigation()
+        startNavButton.isEnabled = false
         route = null
         routeLayer?.clear()
         destination = null
@@ -549,7 +714,11 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() { mapView.onPause(); super.onPause() }
     override fun onStop() { mapView.onStop(); super.onStop() }
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
-    override fun onDestroy() { mapView.onDestroy(); super.onDestroy() }
+    override fun onDestroy() {
+        getSystemService(LocationManager::class.java).removeUpdates(navLocationListener)
+        mapView.onDestroy()
+        super.onDestroy()
+    }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView.onSaveInstanceState(outState) }
 
     private companion object {
