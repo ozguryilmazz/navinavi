@@ -32,15 +32,16 @@ data class Route(
 )
 
 /**
- * TomTom Search ve Routing API'leri. Ücretsiz planda günde 2.500 istek var,
- * bu yüzden arama sadece kullanıcı "ara" dediğinde yapılır (harf harf değil).
+ * TomTom Search ve Routing API'leri. Ücretsiz planda günde 2.500 istek var;
+ * yazarken arama yapıldığı için çağıran taraf beklemeli (debounce) ve önbelleğe almalı.
  */
 class TomTomApi(private val apiKeys: ApiKeys) {
 
+    /** typeahead=true: yazılmakta olan, yarım kalmış kelimeleri de tamamlayarak arar. */
     suspend fun search(query: String, near: LatLng?): List<Place> {
         val q = URLEncoder.encode(query.trim(), "UTF-8").replace("+", "%20")
         val params = buildString {
-            append("countrySet=TR&language=tr-TR&limit=10")
+            append("countrySet=TR&language=tr-TR&limit=20&typeahead=true")
             if (near != null) append("&lat=${fmt(near.latitude)}&lon=${fmt(near.longitude)}")
         }
         val json = get("https://api.tomtom.com/search/2/search/$q.json?$params")

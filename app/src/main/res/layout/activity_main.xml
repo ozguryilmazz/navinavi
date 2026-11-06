@@ -32,6 +32,14 @@
             android:textColor="#212121"
             android:textColorHint="#757575" />
 
+        <!-- Yazdıkça dolan öneri listesi -->
+        <LinearLayout
+            android:id="@+id/suggestions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone" />
+
         <!-- Rota çizilince görünür -->
         <LinearLayout
             android:id="@+id/route_row"

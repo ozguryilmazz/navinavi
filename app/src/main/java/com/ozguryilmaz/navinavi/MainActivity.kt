@@ -12,6 +12,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +23,10 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.lifecycleScope
+import androidx.core.widget.doAfterTextChanged
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 import org.maplibre.android.MapLibre
@@ -46,6 +51,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var updateStatus: TextView
     private val tomtom by lazy { TomTomApi(apiKeys) }
     private lateinit var searchBox: EditText
+    private lateinit var suggestions: LinearLayout
+    private var searchJob: Job? = null
+    private var suppressSearch = false
+    // Aynı metni tekrar tekrar sormamak için (kota tasarrufu).
+    private val searchCache = HashMap<String, List<Place>>()
+    private var lastResults: List<Place> = emptyList()
     private lateinit var routeRow: View
     private lateinit var routeInfo: TextView
     private var map: MapLibreMap? = null
@@ -74,11 +85,16 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.key_button).setOnClickListener { askTomtomKey() }
         findViewById<View>(R.id.my_location).setOnClickListener { followMe() }
         searchBox = findViewById(R.id.search)
+        suggestions = findViewById(R.id.suggestions)
+        // Klavyedeki ara tuşu sadece klavyeyi kapatır; sonuçlar zaten yazarken listeleniyor.
         searchBox.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
-                search(searchBox.text.toString())
+                hideKeyboard()
                 true
             } else false
+        }
+        searchBox.doAfterTextChanged { text ->
+            if (!suppressSearch) onSearchTextChanged(text?.toString().orEmpty())
         }
         routeRow = findViewById(R.id.route_row)
         routeInfo = findViewById(R.id.route_info)
@@ -185,26 +201,78 @@ class MainActivity : AppCompatActivity() {
         searchBox.clearFocus()
     }
 
-    private fun search(query: String) {
-        if (query.isBlank()) return
-        hideKeyboard()
-        lifecycleScope.launch {
+    /**
+     * Yazdıkça: önce eldeki sonuçlar anında süzülür, yazma durunca (400 ms) TomTom'a sorulur.
+     * 3 harften kısa metinler için istek atılmaz.
+     */
+    private fun onSearchTextChanged(text: String) {
+        searchJob?.cancel()
+        val query = text.trim()
+        if (query.length < MIN_SEARCH_CHARS) {
+            showSuggestions(emptyList(), query)
+            return
+        }
+        showSuggestions(PlaceMatcher.filter(query, lastResults), query)
+
+        val key = PlaceMatcher.normalize(query)
+        searchCache[key]?.let { cached ->
+            lastResults = cached
+            showSuggestions(PlaceMatcher.filter(query, cached), query)
+            return
+        }
+        searchJob = lifecycleScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
             try {
                 val places = tomtom.search(query, near = currentLocation())
-                if (places.isEmpty()) {
-                    Toast.makeText(this@MainActivity, R.string.no_results, Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
-                val labels = places.map { if (it.address.isEmpty()) it.name else "${it.name}\n${it.address}" }
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle(query)
-                    .setItems(labels.toTypedArray()) { _, i -> routeTo(places[i]) }
-                    .setNegativeButton(R.string.cancel, null)
-                    .show()
+                searchCache[key] = places
+                lastResults = places
+                showSuggestions(PlaceMatcher.filter(query, places), query, searched = true)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                showError(e)
+                // Her harfte pencere açılmasın diye hata listenin içinde gösterilir.
+                val msg = if (e is TomTomException) e.message else "Arama hatası: ${e.message}"
+                showSuggestions(emptyList(), query, searched = true, message = msg)
             }
         }
+    }
+
+    private fun showSuggestions(places: List<Place>, query: String, searched: Boolean = false, message: String? = null) {
+        suggestions.removeAllViews()
+        if (query.length < MIN_SEARCH_CHARS || (places.isEmpty() && !searched)) {
+            suggestions.visibility = View.GONE
+            return
+        }
+        suggestions.visibility = View.VISIBLE
+        val pad = (8 * resources.displayMetrics.density).toInt()
+        if (places.isEmpty()) {
+            suggestions.addView(TextView(this).apply {
+                text = message ?: getString(R.string.no_results)
+                setTextColor(0xFF757575.toInt())
+                setPadding(pad, pad, pad, pad)
+            })
+            return
+        }
+        for (p in places) {
+            suggestions.addView(TextView(this).apply {
+                text = if (p.address.isEmpty()) p.name else "${p.name}\n${p.address}"
+                setTextColor(0xFF212121.toInt())
+                textSize = 15f
+                setPadding(pad, pad, pad, pad)
+                setBackgroundResource(android.R.drawable.list_selector_background)
+                setOnClickListener { pickPlace(p) }
+            })
+        }
+    }
+
+    private fun pickPlace(p: Place) {
+        searchJob?.cancel()
+        suppressSearch = true
+        searchBox.setText(p.name)
+        suppressSearch = false
+        showSuggestions(emptyList(), "")
+        hideKeyboard()
+        routeTo(p)
     }
 
     private fun routeTo(place: Place) {
@@ -245,7 +313,10 @@ class MainActivity : AppCompatActivity() {
         route = null
         routeLayer?.clear()
         routeRow.visibility = View.GONE
+        suppressSearch = true
         searchBox.text.clear()
+        suppressSearch = false
+        showSuggestions(emptyList(), "")
     }
 
     private fun formatSummary(r: Route): String {
@@ -346,5 +417,7 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         // Ücretsiz, anahtarsız harita stili (TomTom kotası harcanmaz).
         const val MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
+        const val MIN_SEARCH_CHARS = 3
+        const val SEARCH_DEBOUNCE_MS = 400L
     }
 }
