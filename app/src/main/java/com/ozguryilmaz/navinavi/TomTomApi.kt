@@ -59,6 +59,24 @@ class TomTomApi(private val apiKeys: ApiKeys) {
         }
     }
 
+    /** Adres metnini koordinata çevirir (en iyi tek sonuç). Bulamazsa null. */
+    suspend fun geocode(address: String, near: LatLng?): Place? {
+        val q = URLEncoder.encode(address.trim(), "UTF-8").replace("+", "%20")
+        val params = buildString {
+            append("countrySet=TR&language=tr-TR&limit=1")
+            if (near != null) append("&lat=${fmt(near.latitude)}&lon=${fmt(near.longitude)}")
+        }
+        val results = get("https://api.tomtom.com/search/2/geocode/$q.json?$params").getJSONArray("results")
+        if (results.length() == 0) return null
+        val r = results.getJSONObject(0)
+        val pos = r.getJSONObject("position")
+        return Place(
+            name = address,
+            address = r.optJSONObject("address")?.optString("freeformAddress").orEmpty(),
+            position = LatLng(pos.getDouble("lat"), pos.getDouble("lon")),
+        )
+    }
+
     suspend fun route(from: LatLng, to: LatLng): Route {
         val locations = "${fmt(from.latitude)},${fmt(from.longitude)}:${fmt(to.latitude)},${fmt(to.longitude)}"
         val params = "traffic=true&travelMode=car&instructionsType=tagged&language=tr-TR" +

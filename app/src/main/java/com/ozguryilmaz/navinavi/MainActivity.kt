@@ -146,7 +146,7 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, R.string.share_resolving, Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             val result = GoogleMapsLink.resolve(text)
-            val place = result.place
+            val place = result.place ?: result.addressHint?.let { geocodeApprox(it) }
             if (place == null) {
                 // Sorunu bulabilmek için ayrıntıyı da göster.
                 val detail = "Paylaşılan metin:\n${text.take(300)}\n\n${result.log.take(1200)}"
@@ -234,6 +234,27 @@ class MainActivity : AppCompatActivity() {
         if (!lc.isLocationComponentActivated) return null
         val l = lc.lastKnownLocation ?: return null
         return LatLng(l.latitude, l.longitude)
+    }
+
+    /**
+     * Google bağlantısında koordinat yoksa, içindeki adresi TomTom'a sorar.
+     * Bulamazsa baştaki parçayı atıp tekrar dener ("Ipay, Özbek, Urla/İzmir" → "Özbek, Urla/İzmir").
+     */
+    private suspend fun geocodeApprox(address: String): Place? {
+        var parts = address.replace("/", ", ").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        repeat(3) {
+            if (parts.size < 2) return null
+            val found = try {
+                tomtom.geocode(parts.joinToString(", "), near = currentLocation())
+            } catch (e: Exception) {
+                return null
+            }
+            if (found != null) {
+                return found.copy(name = "${address.substringBefore(",")} (yaklaşık konum)")
+            }
+            parts = parts.drop(1)
+        }
+        return null
     }
 
     private fun hideKeyboard() {

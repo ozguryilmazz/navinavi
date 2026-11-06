@@ -28,12 +28,6 @@ object GoogleMapsLink {
         Regex("geo:$NUM,$NUM"),
     )
 
-    // Sayfa içeriğinde son çare olarak aranan biçimler.
-    private val htmlPatterns = listOf(
-        Regex("\\[null,null,$NUM,$NUM\\]"),
-        Regex("center=$NUM(?:%2C|,)$NUM"),
-    )
-
     /** Paylaşılan metinde Google Haritalar bağlantısı yoksa null döner. */
     fun findLink(sharedText: String): String? =
         urlRegex.findAll(sharedText).map { it.value.trimEnd('.', ',', ')') }
@@ -52,12 +46,15 @@ object GoogleMapsLink {
 
     private const val FALLBACK_NAME = "Google Haritalar'dan paylaşılan yer"
 
-    /** Sonuç ve, başarısız olursa kullanıcıya gösterilecek adım adım kayıt. */
-    data class Result(val place: Place?, val log: String)
+    /**
+     * place: koordinat bağlantıda bulunduysa. Bulunamadıysa addressHint, bağlantıdaki
+     * yer adı/adres metnidir (adres bulma servisine sorulabilir). log: hata ayrıntısı.
+     */
+    data class Result(val place: Place?, val addressHint: String?, val log: String)
 
     suspend fun resolve(sharedText: String): Result = withContext(Dispatchers.IO) {
         val log = StringBuilder()
-        val link = findLink(sharedText) ?: return@withContext Result(null, "Bağlantı yok")
+        val link = findLink(sharedText) ?: return@withContext Result(null, null, "Bağlantı yok")
         val textName = nameFrom(sharedText)
 
         var url = link
@@ -66,7 +63,7 @@ object GoogleMapsLink {
         try {
             repeat(MAX_REDIRECTS) {
                 log.appendLine("→ ${url.take(120)}")
-                parseCoords(url)?.let { return@withContext Result(Place(name(), "", it), log.toString()) }
+                parseCoords(url)?.let { return@withContext Result(Place(name(), "", it), null, log.toString()) }
                 val conn = open(url)
                 try {
                     val code = conn.responseCode
@@ -75,12 +72,10 @@ object GoogleMapsLink {
                     if (code in 300..399 && location != null) {
                         url = unwrapConsent(URL(URL(url), location).toString())
                     } else {
-                        // Yönlendirme bitti; koordinat adreste yoksa sayfanın içinde ara.
-                        val body = if (code == 200) conn.inputStream.bufferedReader().use { it.readText() } else ""
-                        val coords = (coordPatterns + htmlPatterns)
-                            .firstNotNullOfOrNull { p -> p.find(body)?.let { toLatLng(it) } }
-                        if (coords == null) log.appendLine("   Sayfada koordinat yok (${body.length} karakter)")
-                        return@withContext Result(coords?.let { Place(name(), "", it) }, log.toString())
+                        // Yönlendirme bitti ve adreste koordinat yok. Google sayfası konumu
+                        // JavaScript ile yüklediği için sayfanın içinde de bulunmuyor.
+                        log.appendLine("   Bağlantıda koordinat yok")
+                        return@withContext Result(null, placeNameFrom(url), log.toString())
                     }
                 } finally {
                     conn.disconnect()
@@ -90,7 +85,7 @@ object GoogleMapsLink {
         } catch (e: Exception) {
             log.appendLine("Hata: ${e.javaClass.simpleName}: ${e.message}")
         }
-        Result(null, log.toString())
+        Result(null, placeNameFrom(url), log.toString())
     }
 
     fun parseCoords(url: String): LatLng? {
