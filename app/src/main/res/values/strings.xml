@@ -8,6 +8,10 @@
     <string name="no_location_yet">Konumunuz henüz bulunamadı, birkaç saniye bekleyip tekrar deneyin.</string>
     <string name="no_results">Sonuç bulunamadı.</string>
     <string name="long_press_point">Haritada seçilen nokta</string>
+    <string name="share_label">NaviNavi ile git</string>
+    <string name="share_no_link">Paylaşılan metinde Google Haritalar bağlantısı bulunamadı.</string>
+    <string name="share_no_coords">Paylaşılan yerin konumu okunamadı. Google Haritalar\'da yeri açıp tekrar paylaşmayı deneyin.</string>
+    <string name="share_resolving">Paylaşılan yer açılıyor…</string>
     <string name="location_denied">Konum izni verilmedi. Haritada konumunuzu göstermek için Ayarlar → Uygulamalar → NaviNavi → İzinler\'den konuma izin verin.</string>
     <string name="key_dialog_title">TomTom API anahtarı</string>
     <string name="key_dialog_message">developer.tomtom.com → Dashboard → API Keys sayfasından anahtarı kopyalayıp buraya yapıştırın. Sadece bu telefonda saklanır.</string>

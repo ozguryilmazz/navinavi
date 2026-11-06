@@ -2,6 +2,7 @@ package com.ozguryilmaz.navinavi
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.text.InputType
@@ -125,6 +126,45 @@ class MainActivity : AppCompatActivity() {
 
         showStatus()
         if (!apiKeys.hasTomtom) askTomtomKey()
+        if (savedInstanceState == null) handleShare(intent)
+    }
+
+    // Uygulama zaten açıkken gelen paylaşımlar (launchMode=singleTask).
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShare(intent)
+    }
+
+    private fun handleShare(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) return
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
+        if (GoogleMapsLink.findLink(text) == null) {
+            showError(TomTomException(getString(R.string.share_no_link)))
+            return
+        }
+        Toast.makeText(this, R.string.share_resolving, Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val place = try {
+                GoogleMapsLink.resolve(text)
+            } catch (e: Exception) {
+                null
+            }
+            if (place == null) {
+                showError(TomTomException(getString(R.string.share_no_coords)))
+                return@launch
+            }
+            suppressSearch = true
+            searchBox.setText(place.name)
+            suppressSearch = false
+            showSuggestions(emptyList(), "")
+            // Uygulama yeni açıldıysa konum birkaç saniye sonra gelir; o zamana kadar bekle.
+            var waited = 0L
+            while (currentLocation() == null && waited < LOCATION_WAIT_MS) {
+                delay(500)
+                waited += 500
+            }
+            routeTo(place)
+        }
     }
 
     // Android 15+ uygulamayı tam ekran çizer; paneller durum/gezinme çubuğunun altına girmesin.
@@ -419,5 +459,6 @@ class MainActivity : AppCompatActivity() {
         const val MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val MIN_SEARCH_CHARS = 3
         const val SEARCH_DEBOUNCE_MS = 400L
+        const val LOCATION_WAIT_MS = 20_000L
     }
 }
