@@ -159,7 +159,15 @@ Kullanıcı "espirili ses kayıtları olur" dedi. Öneri listesi:
   - `NavigationService.kt`: konum tipinde ön plan servisi; arka planda/ekran kapalıyken navigasyon sürer.
   - `car/`: `NaviCarAppService` + `NavScreen` (NavigationTemplate, manevra oku, varış tahmini), `DestinationScreen`/`SearchScreen` (favoriler, arama sadece "Ara"ya basınca), `CarMapRenderer` (VirtualDisplay + Presentation + MapLibre textureMode), `CarGuidance` (TomTom manevra → Car `Maneuver`, ok ikonları `res/drawable/ic_turn_*`).
   - Araba haritası çizimi (VirtualDisplay yöntemi) gerçek araçta doğrulanmalı.
-- **Sıradaki:** 5. adımı araçta dene. Asıl amaç trafik ışığı (7. adım) olduğu için Android Auto'dan sonra sırayı kullanıcıyla konuş; 7. adımı 6'dan önce almak mantıklı olabilir.
+- 5. adım main'de yayımlandı (b16). Kullanıcı Android Auto'da "Bilinmeyen kaynaklar"ı açtı; araç denemesini en sona bıraktı.
+- **7. adım, 1. kısım (veri toplama) kodlandı (`trafik-isigi` dalı):**
+  - `TrafficLights.kt`: Overpass POST (`node(around:25,<çizgi>)[highway=traffic_signals]`), yedek sunucu `overpass.private.coffee`. GET isteği 406 veriyor, POST şart. Rota ilk 60 km, Douglas–Peucker 8 m. Aynı kavşakta 40 m içindeki düğümler tek ışık.
+  - Işık anahtarı `RouteLight.key` = `<osm düğüm id>:<yön dilimi 0-3>`.
+  - `LightStore.kt`: düz SQLite (`lights.db`, tablo `records`). Room yerine; KSP eklentisi yerel derleme olmadan riskli.
+  - `NavSession.recordLight()`: en yakın ışık (−40…+250 m), GPS saati. `autoRecord()`: ışığa 30 m içinde ≥5 sn duruş → kalkışta AUTO yeşil (−3 sn).
+  - Android Auto action strip: en fazla 4 düğme, **sadece 1 yazılı** (diğerleri ikonlu) — bu kurala uy.
+- **Sıradaki:** 7. adım 2. kısım — döngü süresi tahmini, "Tahmini yeşil: ~23 sn", hız önerisi. Önce kullanıcı birkaç gün kayıt toplasın.
+- Kısıt: Işık kaydı sadece navigasyon açıkken (ışıklar rotadan çekiliyor). Asıl amaç trafik ışığı (7. adım) olduğu için Android Auto'dan sonra sırayı kullanıcıyla konuş; 7. adımı 6'dan önce almak mantıklı olabilir.
 - Yerel derleme yok (bilgisayarda SSL engeli); derleme sadece GitHub Actions'ta. `gh` CLI kurulu değil, durum public API ile `curl` üzerinden okunuyor.
 
 ## Claude Code'a ilk görev
