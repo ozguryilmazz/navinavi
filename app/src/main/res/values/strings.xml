@@ -29,6 +29,14 @@
     <string name="key_dialog_title">TomTom API anahtarı</string>
     <string name="key_dialog_message">developer.tomtom.com → Dashboard → API Keys sayfasından anahtarı kopyalayıp buraya yapıştırın. Sadece bu telefonda saklanır.</string>
     <string name="key_dialog_hint">Anahtarı yapıştırın</string>
+    <string name="nav_channel">Navigasyon</string>
+    <string name="nav_notification_title">NaviNavi yol gösteriyor</string>
+    <string name="calculating">Rota hesaplanıyor…</string>
+    <string name="no_route">Rota bulunamadı</string>
+    <string name="car_destination">Hedef</string>
+    <string name="car_search">Ara</string>
+    <string name="car_no_favorites">Favori yok. Telefonda bir yere rota çizip ★ Kaydet\'e basın.</string>
+    <string name="go_straight">Düz devam edin</string>
     <string name="save">Kaydet</string>
     <string name="cancel">Vazgeç</string>
 </resources>

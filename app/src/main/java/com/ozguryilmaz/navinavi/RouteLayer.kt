@@ -55,6 +55,14 @@ class RouteLayer(style: Style) {
         routeSource.setGeoJson(LineString.fromLngLats(points.map { Point.fromLngLat(it.longitude, it.latitude) }))
     }
 
+    /** Hedefi ve rotayı birlikte çizer; null olan silinir. */
+    fun set(destination: LatLng?, points: List<LatLng>?) {
+        if (destination != null) showDestination(destination)
+        else destinationSource.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
+        if (points != null) showRoute(points)
+        else routeSource.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
+    }
+
     fun clear() {
         routeSource.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
         destinationSource.setGeoJson(FeatureCollection.fromFeatures(emptyList()))

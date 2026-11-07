@@ -4,11 +4,8 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
+import android.os.Build
 import android.os.Bundle
-import android.os.SystemClock
 import android.view.WindowManager
 import android.text.InputType
 import android.view.View
@@ -28,7 +25,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updateLayoutParams
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.core.widget.doAfterTextChanged
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -68,25 +67,15 @@ class MainActivity : AppCompatActivity() {
     private var map: MapLibreMap? = null
     private var style: Style? = null
     private var routeLayer: RouteLayer? = null
-    private var route: Route? = null
-    private var destination: Place? = null
     private val favorites by lazy { Favorites(this) }
 
-    // Navigasyon durumu
-    private var navigator: Navigator? = null
-    private val offRoute = OffRouteDetector()
-    private var navigating = false
-    private var rerouting = false
+    // Ekranda en son çizilen durum (her konumda haritayı baştan çizmemek için).
+    private var shownRoute: Route? = null
+    private var shownDestination: Place? = null
+    private var navUi = false
     private var movedOnce = false
     private lateinit var startNavButton: Button
-    // Android 10 ve öncesinde bu metotların hepsi zorunlu; lambda yazılırsa çöker.
-    private val navLocationListener = object : LocationListener {
-        override fun onLocationChanged(location: Location) = onNavLocation(location)
-        override fun onProviderEnabled(provider: String) {}
-        override fun onProviderDisabled(provider: String) {}
-        @Deprecated("Android 10 ve öncesi için")
-        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-    }
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     private val locationPermission = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -99,6 +88,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         // MapLibre, MapView oluşturulmadan önce başlatılmalı.
         MapLibre.getInstance(this)
+        NavSession.init(this)
         setContentView(R.layout.activity_main)
 
         mapView = findViewById(R.id.map)
@@ -132,8 +122,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.clear_route).setOnClickListener { clearRoute() }
         startNavButton = findViewById(R.id.start_nav)
         startNavButton.setOnClickListener { startNavigation() }
-        findViewById<Button>(R.id.stop_nav).setOnClickListener { stopNavigation() }
-        findViewById<Button>(R.id.save_favorite).setOnClickListener { destination?.let { askFavoriteName(it) } }
+        findViewById<Button>(R.id.stop_nav).setOnClickListener { NavSession.stop() }
+        findViewById<Button>(R.id.save_favorite).setOnClickListener {
+            NavSession.state.value.destination?.let { askFavoriteName(it) }
+        }
         applySystemBarInsets()
 
         mapView.onCreate(savedInstanceState)
@@ -154,7 +146,29 @@ class MainActivity : AppCompatActivity() {
             m.setStyle(Style.Builder().fromUri(MAP_STYLE_URL)) { s ->
                 style = s
                 routeLayer = RouteLayer(s)
+                shownRoute = null
+                shownDestination = null
                 if (hasLocationPermission()) enableLocation(follow = firstStart) else requestLocationPermission()
+                // Navigasyon harita hazır olmadan başladıysa (ör. arabadan) kamera ayarı şimdi yapılsın.
+                if (NavSession.state.value.navigating) navUi = false
+                render(NavSession.state.value)
+            }
+        }
+
+        // Navigasyon durumu telefon ya da araba ekranından değişebilir; ekran hep onu izler.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch { NavSession.state.collect { render(it) } }
+                launch {
+                    NavSession.events.collect { e ->
+                        when (e) {
+                            NavSession.Event.Arrived -> AlertDialog.Builder(this@MainActivity)
+                                .setMessage(R.string.arrived).setPositiveButton(android.R.string.ok, null).show()
+                            is NavSession.Event.Error ->
+                                Toast.makeText(this@MainActivity, e.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
             }
         }
 
@@ -271,7 +285,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         lc.cameraMode = when {
-            !navigating -> CameraMode.TRACKING // kuzey yukarıda, sadece konumu izle
+            !navUi -> CameraMode.TRACKING // kuzey yukarıda, sadece konumu izle
             movedOnce -> CameraMode.TRACKING_GPS
             else -> CameraMode.TRACKING_COMPASS
         }
@@ -341,7 +355,7 @@ class MainActivity : AppCompatActivity() {
                 val name = input.text.toString().trim()
                 if (name.isNotEmpty()) {
                     favorites.save(name, place.position)
-                    if (destination?.position == place.position) destination = place.copy(name = name)
+                    NavSession.renameDestination(place.copy(name = name))
                     Toast.makeText(this, R.string.favorite_saved, Toast.LENGTH_LONG).show()
                 }
             }
@@ -461,23 +475,14 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.no_location_yet, Toast.LENGTH_LONG).show()
             return
         }
-        destination = place
-        route = null
-        startNavButton.isEnabled = false
         hideSuggestions()
-        routeLayer?.showDestination(place.position)
-        routeRow.visibility = View.VISIBLE
-        routeInfo.text = "Rota hesaplanıyor…"
         lifecycleScope.launch {
             try {
-                val r = tomtom.route(from, place.position)
-                route = r
-                routeLayer?.showRoute(r.points)
-                routeInfo.text = "${place.name}\n${formatSummary(r)}"
-                startNavButton.isEnabled = true
+                val r = NavSession.routeTo(from, place) ?: return@launch
                 fitRoute(r)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                routeInfo.text = place.name
                 showError(e)
             }
         }
@@ -496,49 +501,83 @@ class MainActivity : AppCompatActivity() {
 
     // ---- Adım adım navigasyon ----
 
-    @SuppressLint("MissingPermission")
     private fun startNavigation() {
-        val r = route ?: return
-        val lc = map?.locationComponent ?: return
-        if (!lc.isLocationComponentActivated) return
-        navigator = Navigator(r)
-        navigating = true
-        rerouting = false
+        // Android 13+: ön plan servisinin bildirimi için izin (verilmese de navigasyon çalışır).
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        NavSession.start(this)
+    }
 
+    /** NavSession durumunu ekrana yansıtır (telefondan ya da arabadan değişmiş olabilir). */
+    private fun render(s: NavSession.State) {
+        val layer = routeLayer
+        if (layer != null && (s.route !== shownRoute || s.destination !== shownDestination)) {
+            layer.set(s.destination?.position, s.route?.points)
+            shownRoute = s.route
+            // Hedef kalktıysa (varış, araba ekranından iptal) arama kutusu da boşalsın.
+            if (s.destination == null && shownDestination != null) clearSearchBox()
+            shownDestination = s.destination
+        }
+
+        if (s.navigating && !navUi) enterNavUi()
+        if (!s.navigating && navUi) exitNavUi()
+
+        if (s.navigating) {
+            val loc = s.location
+            // İlk gerçek harekette GPS yönüne geç: arabada pusula titrer, GPS yönü kırmızı ışıkta da sabit kalır.
+            if (!movedOnce && loc != null && loc.hasBearing() && loc.hasSpeed() && loc.speed > MOVING_SPEED_MPS) {
+                movedOnce = true
+                map?.locationComponent?.takeIf { it.isLocationComponentActivated }?.let {
+                    it.renderMode = RenderMode.GPS
+                    it.cameraMode = CameraMode.TRACKING_GPS
+                }
+            }
+            val p = s.progress
+            when {
+                s.rerouting -> showGuidanceMessage("⟲", getString(R.string.rerouting))
+                p == null -> showGuidanceMessage("", getString(R.string.gps_waiting))
+                else -> showGuidance(p)
+            }
+        } else {
+            val dest = s.destination
+            routeRow.visibility = if (dest != null) View.VISIBLE else View.GONE
+            val r = s.route
+            routeInfo.text = when {
+                dest == null -> ""
+                s.calculating -> "Rota hesaplanıyor…"
+                r != null -> "${dest.name}\n${formatSummary(r)}"
+                else -> dest.name
+            }
+            startNavButton.isEnabled = r != null && !s.calculating
+        }
+    }
+
+    private fun enterNavUi() {
+        navUi = true
         findViewById<View>(R.id.top_panel).visibility = View.GONE
         findViewById<View>(R.id.nav_panel).visibility = View.VISIBLE
         findViewById<View>(R.id.nav_bottom).visibility = View.VISIBLE
-        findViewById<TextView>(R.id.nav_text).setText(R.string.gps_waiting)
         // Navigasyonda ekran kapanmasın.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Kamera arabanın arkasından, gidiş yönüne dönük ve eğik baksın; araç ekranın alt tarafında dursun.
         // GPS yönü ancak hareket ederken bilinir; araç ilk kez hızlanana kadar pusula kullanılır.
         movedOnce = false
+        val lc = map?.locationComponent ?: return
+        if (!lc.isLocationComponentActivated) return
         lc.renderMode = RenderMode.COMPASS
         lc.cameraMode = CameraMode.TRACKING_COMPASS
         lc.zoomWhileTracking(17.0)
         lc.tiltWhileTracking(45.0)
         lc.paddingWhileTracking(doubleArrayOf(0.0, mapView.height * 0.4, 0.0, 0.0))
-
-        val lm = getSystemService(LocationManager::class.java)
-        val provider = if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
-        try {
-            lm.requestLocationUpdates(provider, 1000L, 0f, navLocationListener, mainLooper)
-        } catch (e: Exception) {
-            Toast.makeText(this, "Konum servisi açılamadı: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-        lc.lastKnownLocation?.let { onNavLocation(it) }
     }
 
-    private fun stopNavigation(arrived: Boolean = false) {
-        if (!navigating) return
-        navigating = false
-        navigator = null
-        getSystemService(LocationManager::class.java).removeUpdates(navLocationListener)
+    private fun exitNavUi() {
+        navUi = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
         findViewById<View>(R.id.nav_panel).visibility = View.GONE
         findViewById<View>(R.id.nav_bottom).visibility = View.GONE
         findViewById<View>(R.id.top_panel).visibility = View.VISIBLE
@@ -550,34 +589,13 @@ class MainActivity : AppCompatActivity() {
                 lc.renderMode = RenderMode.COMPASS
             }
         }
-        if (arrived) {
-            clearRoute()
-            AlertDialog.Builder(this).setMessage(R.string.arrived).setPositiveButton(android.R.string.ok, null).show()
-        }
     }
 
-    private fun onNavLocation(location: Location) {
-        val nav = navigator ?: return
-        if (!navigating || rerouting) return
-        // İlk gerçek harekette GPS yönüne geç: arabada pusula titrer, GPS yönü kırmızı ışıkta da sabit kalır.
-        if (!movedOnce && location.hasBearing() && location.hasSpeed() && location.speed > MOVING_SPEED_MPS) {
-            movedOnce = true
-            map?.locationComponent?.let {
-                it.renderMode = RenderMode.GPS
-                it.cameraMode = CameraMode.TRACKING_GPS
-            }
-        }
-        val p = nav.update(LatLng(location.latitude, location.longitude))
-
-        if (p.arrived) {
-            stopNavigation(arrived = true)
-            return
-        }
-        if (offRoute.check(p.distanceFromRoute, location.accuracy, SystemClock.elapsedRealtime())) {
-            reroute(LatLng(location.latitude, location.longitude))
-            return
-        }
-        showGuidance(p)
+    private fun showGuidanceMessage(arrow: String, text: String) {
+        findViewById<TextView>(R.id.nav_arrow).text = arrow
+        findViewById<TextView>(R.id.nav_distance).text = ""
+        findViewById<TextView>(R.id.nav_text).text = text
+        findViewById<View>(R.id.nav_then).visibility = View.GONE
     }
 
     private fun showGuidance(p: NavProgress) {
@@ -602,38 +620,12 @@ class MainActivity : AppCompatActivity() {
                 String.format(Locale("tr", "TR"), "%02d:%02d", eta.hour, eta.minute)
     }
 
-    /** Rotadan çıkıldı: bulunduğum yerden hedefe yeni rota (OffRouteDetector en fazla 20 sn'de bir izin verir). */
-    private fun reroute(from: LatLng) {
-        val dest = destination ?: return
-        rerouting = true
-        findViewById<TextView>(R.id.nav_arrow).text = "⟲"
-        findViewById<TextView>(R.id.nav_distance).text = ""
-        findViewById<TextView>(R.id.nav_text).setText(R.string.rerouting)
-        findViewById<View>(R.id.nav_then).visibility = View.GONE
-        lifecycleScope.launch {
-            try {
-                val r = tomtom.route(from, dest.position)
-                if (!navigating) return@launch
-                route = r
-                navigator = Navigator(r)
-                routeLayer?.showRoute(r.points)
-            } catch (e: Exception) {
-                // Navigasyonu kesme; eski rotayla devam, bir sonraki sapmada tekrar denenir.
-                val msg = if (e is TomTomException) e.message else e.message
-                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
-            } finally {
-                rerouting = false
-            }
-        }
+    private fun clearRoute() {
+        NavSession.clear()
+        clearSearchBox()
     }
 
-    private fun clearRoute() {
-        stopNavigation()
-        startNavButton.isEnabled = false
-        route = null
-        routeLayer?.clear()
-        destination = null
-        routeRow.visibility = View.GONE
+    private fun clearSearchBox() {
         suppressSearch = true
         searchBox.text.clear()
         suppressSearch = false
@@ -732,8 +724,8 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() { mapView.onPause(); super.onPause() }
     override fun onStop() { mapView.onStop(); super.onStop() }
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
+    // Navigasyon NavigationService'te sürer; ekran kapansa da durmaz.
     override fun onDestroy() {
-        getSystemService(LocationManager::class.java).removeUpdates(navLocationListener)
         mapView.onDestroy()
         super.onDestroy()
     }

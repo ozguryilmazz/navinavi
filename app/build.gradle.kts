@@ -71,4 +71,6 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.maplibre.android)
+    implementation(libs.androidx.car.app)
+    implementation(libs.androidx.car.app.projected)
 }
