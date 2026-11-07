@@ -154,8 +154,12 @@ Kullanıcı "espirili ses kayıtları olur" dedi. Öneri listesi:
   - **Favoriler** (`Favorites.kt`): rotadaki yeri ★ Kaydet; yeşil konum butonuna uzun basınca bulunduğun yeri kaydet; aramada en üstte.
   - Adım adım yön tarifi (`Navigator.kt`): rotaya izdüşüm, sıradaki manevra, kalan yol/süre/varış; 50 m + 4 sn sapmada yeniden rota (en fazla 20 sn'de bir). Ok: dururken pusula, ~9 km/sa üstünde GPS yönü.
 - **Reddedilen ek kaynaklar:** Yandex (ücretsiz şartlar navigasyon benzeri uygulamayı, sonuçları süzmeyi ve 30 günden uzun saklamayı yasaklıyor; Places API ücretli). TomTom ve OSM'de küçük işletmeler eksik; çözüm Google paylaşımı + favoriler.
-- **Bilinen sınırlama:** Uygulama arka plandayken navigasyon güncellenmiyor → 5. adımda foreground service.
-- **Sıradaki:** 5. adım (Android Auto). Asıl amaç trafik ışığı (7. adım) olduğu için Android Auto'dan sonra sırayı kullanıcıyla konuş; 7. adımı 6'dan önce almak mantıklı olabilir.
+- **5. adım kodlandı (2026-11-07, `android-auto` dalı), araçta henüz denenmedi:**
+  - `NavSession.kt`: telefon ve arabanın ortak navigasyon durumu (StateFlow); rota, ilerleme, yeniden rota burada.
+  - `NavigationService.kt`: konum tipinde ön plan servisi; arka planda/ekran kapalıyken navigasyon sürer.
+  - `car/`: `NaviCarAppService` + `NavScreen` (NavigationTemplate, manevra oku, varış tahmini), `DestinationScreen`/`SearchScreen` (favoriler, arama sadece "Ara"ya basınca), `CarMapRenderer` (VirtualDisplay + Presentation + MapLibre textureMode), `CarGuidance` (TomTom manevra → Car `Maneuver`, ok ikonları `res/drawable/ic_turn_*`).
+  - Araba haritası çizimi (VirtualDisplay yöntemi) gerçek araçta doğrulanmalı.
+- **Sıradaki:** 5. adımı araçta dene. Asıl amaç trafik ışığı (7. adım) olduğu için Android Auto'dan sonra sırayı kullanıcıyla konuş; 7. adımı 6'dan önce almak mantıklı olabilir.
 - Yerel derleme yok (bilgisayarda SSL engeli); derleme sadece GitHub Actions'ta. `gh` CLI kurulu değil, durum public API ile `curl` üzerinden okunuyor.
 
 ## Claude Code'a ilk görev
