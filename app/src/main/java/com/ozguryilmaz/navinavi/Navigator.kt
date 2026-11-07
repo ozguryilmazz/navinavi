@@ -22,6 +22,8 @@ data class NavProgress(
     val arrived: Boolean,
 )
 
+data class RoutePoint(val distanceFromRoute: Double, val offset: Double, val bearing: Double)
+
 /**
  * Rota üzerinde ilerlemeyi hesaplar: konumu en yakın rota parçasına izdüşürür,
  * gidilen yolu bulur ve sıradaki manevrayı seçer. Android'den bağımsız, saf hesap.
@@ -87,6 +89,35 @@ class Navigator(val route: Route) {
             afterNext = upcoming.getOrNull(1),
             arrived = arrived,
         )
+    }
+
+    /**
+     * Bir noktanın (ör. trafik ışığı) rotadaki yeri: rotaya uzaklık, başlangıçtan rota boyunca mesafe
+     * ve o noktada gidiş yönü (derece, kuzey=0). İlerleme durumunu değiştirmez.
+     */
+    fun locate(p: LatLng): RoutePoint? {
+        if (points.size < 2) return null
+        var best = Double.MAX_VALUE
+        var bestSeg = 0
+        var bestT = 0.0
+        for (i in 0 until points.size - 1) {
+            val (d, t) = projectToSegment(p, points[i], points[i + 1])
+            if (d < best) {
+                best = d
+                bestSeg = i
+                bestT = t
+            }
+        }
+        val a = points[bestSeg]
+        val b = points[bestSeg + 1]
+        return RoutePoint(best, cumulative[bestSeg] + distance(a, b) * bestT, bearing(a, b))
+    }
+
+    private fun bearing(a: LatLng, b: LatLng): Double {
+        val k = cos(Math.toRadians(a.latitude))
+        val dx = (b.longitude - a.longitude) * k
+        val dy = b.latitude - a.latitude
+        return (Math.toDegrees(kotlin.math.atan2(dx, dy)) + 360) % 360
     }
 
     /** Noktanın [a,b] parçasına uzaklığı (m) ve parça üzerindeki oran (0..1). */

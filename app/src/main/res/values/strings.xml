@@ -37,6 +37,10 @@
     <string name="car_search">Ara</string>
     <string name="car_no_favorites">Favori yok. Telefonda bir yere rota çizip ★ Kaydet\'e basın.</string>
     <string name="go_straight">Düz devam edin</string>
+    <string name="light_green">🟢 Yeşil</string>
+    <string name="light_red">🔴 Kırmızı</string>
+    <string name="light_distance">🚦 Işık: %1$s</string>
+    <string name="car_light_distance">Işık %1$s</string>
     <string name="save">Kaydet</string>
     <string name="cancel">Vazgeç</string>
 </resources>

@@ -17,6 +17,7 @@ import com.ozguryilmaz.navinavi.NavSession
 import com.ozguryilmaz.navinavi.Place
 import com.ozguryilmaz.navinavi.Route
 import com.ozguryilmaz.navinavi.RouteLayer
+import com.ozguryilmaz.navinavi.RouteLight
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -50,6 +51,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback {
 
     private var shownRoute: Route? = null
     private var shownDestination: Place? = null
+    private var shownLights: List<RouteLight>? = null
     /** Kamera en son hangi kipe ayarlandı: null = henüz ayarlanmadı. */
     private var cameraNavigating: Boolean? = null
 
@@ -97,6 +99,7 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback {
             routeLayer = RouteLayer(s)
             shownRoute = null
             shownDestination = null
+            shownLights = null
             cameraNavigating = null
             enableLocation(m, s, p)
             render(NavSession.state.value)
@@ -132,6 +135,10 @@ class CarMapRenderer(private val carContext: CarContext) : SurfaceCallback {
             layer.set(s.destination?.position, s.route?.points)
             shownRoute = s.route
             shownDestination = s.destination
+        }
+        if (s.lights !== shownLights) {
+            layer.setLights(s.lights.map { it.position })
+            shownLights = s.lights
         }
         val lc = m.locationComponent
         if (!lc.isLocationComponentActivated) return

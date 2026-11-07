@@ -23,10 +23,12 @@ class RouteLayer(style: Style) {
 
     private val routeSource = GeoJsonSource("route")
     private val destinationSource = GeoJsonSource("destination")
+    private val lightsSource = GeoJsonSource("lights")
 
     init {
         style.addSource(routeSource)
         style.addSource(destinationSource)
+        style.addSource(lightsSource)
         style.addLayer(
             LineLayer("route-casing", "route").withProperties(
                 lineColor("#0D47A1"), lineWidth(10f),
@@ -37,6 +39,13 @@ class RouteLayer(style: Style) {
             LineLayer("route-line", "route").withProperties(
                 lineColor("#2196F3"), lineWidth(6f),
                 lineCap(Property.LINE_CAP_ROUND), lineJoin(Property.LINE_JOIN_ROUND),
+            )
+        )
+        // Rota üzerindeki trafik ışıkları: küçük turuncu noktalar.
+        style.addLayer(
+            CircleLayer("lights-dot", "lights").withProperties(
+                circleColor("#FF9800"), circleRadius(6f),
+                circleStrokeColor("#212121"), circleStrokeWidth(2f),
             )
         )
         style.addLayer(
@@ -63,7 +72,16 @@ class RouteLayer(style: Style) {
         else routeSource.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
     }
 
+    fun setLights(points: List<LatLng>) {
+        lightsSource.setGeoJson(
+            FeatureCollection.fromFeatures(
+                points.map { org.maplibre.geojson.Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude)) }
+            )
+        )
+    }
+
     fun clear() {
+        lightsSource.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
         routeSource.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
         destinationSource.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
     }

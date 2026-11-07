@@ -72,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     // Ekranda en son çizilen durum (her konumda haritayı baştan çizmemek için).
     private var shownRoute: Route? = null
     private var shownDestination: Place? = null
+    private var shownLights: List<RouteLight>? = null
     private var navUi = false
     private var movedOnce = false
     private lateinit var startNavButton: Button
@@ -123,6 +124,8 @@ class MainActivity : AppCompatActivity() {
         startNavButton = findViewById(R.id.start_nav)
         startNavButton.setOnClickListener { startNavigation() }
         findViewById<Button>(R.id.stop_nav).setOnClickListener { NavSession.stop() }
+        findViewById<Button>(R.id.light_green).setOnClickListener { NavSession.recordLight(LightRecord.Kind.GREEN) }
+        findViewById<Button>(R.id.light_red).setOnClickListener { NavSession.recordLight(LightRecord.Kind.RED) }
         findViewById<Button>(R.id.save_favorite).setOnClickListener {
             NavSession.state.value.destination?.let { askFavoriteName(it) }
         }
@@ -148,6 +151,7 @@ class MainActivity : AppCompatActivity() {
                 routeLayer = RouteLayer(s)
                 shownRoute = null
                 shownDestination = null
+                shownLights = null
                 if (hasLocationPermission()) enableLocation(follow = firstStart) else requestLocationPermission()
                 // Navigasyon harita hazır olmadan başladıysa (ör. arabadan) kamera ayarı şimdi yapılsın.
                 if (NavSession.state.value.navigating) navUi = false
@@ -166,6 +170,8 @@ class MainActivity : AppCompatActivity() {
                                 .setMessage(R.string.arrived).setPositiveButton(android.R.string.ok, null).show()
                             is NavSession.Event.Error ->
                                 Toast.makeText(this@MainActivity, e.message, Toast.LENGTH_LONG).show()
+                            is NavSession.Event.Info ->
+                                Toast.makeText(this@MainActivity, e.message, Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
@@ -521,6 +527,10 @@ class MainActivity : AppCompatActivity() {
             if (s.destination == null && shownDestination != null) clearSearchBox()
             shownDestination = s.destination
         }
+        if (layer != null && s.lights !== shownLights) {
+            layer.setLights(s.lights.map { it.position })
+            shownLights = s.lights
+        }
 
         if (s.navigating && !navUi) enterNavUi()
         if (!s.navigating && navUi) exitNavUi()
@@ -534,6 +544,14 @@ class MainActivity : AppCompatActivity() {
                     it.renderMode = RenderMode.GPS
                     it.cameraMode = CameraMode.TRACKING_GPS
                 }
+            }
+            val lightInfo = findViewById<TextView>(R.id.light_info)
+            val light = s.nextLight
+            if (light != null) {
+                lightInfo.text = getString(R.string.light_distance, formatDistance(s.nextLightDistance))
+                lightInfo.visibility = View.VISIBLE
+            } else {
+                lightInfo.visibility = View.GONE
             }
             val p = s.progress
             when {
