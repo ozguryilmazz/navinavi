@@ -74,7 +74,7 @@ class NavScreen(carContext: CarContext, private val renderer: CarMapRenderer) : 
                 val r = s.route
                 val text = when {
                     s.calculating -> carContext.getString(R.string.calculating)
-                    r != null -> summary(r)
+                    r != null -> summary(r) + (NavSession.lightsText(s)?.let { "\n$it" } ?: "")
                     else -> carContext.getString(R.string.no_route)
                 }
                 b.setNavigationInfo(MessageInfo.Builder(dest.name).setText(text).build())

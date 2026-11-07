@@ -547,12 +547,14 @@ class MainActivity : AppCompatActivity() {
             }
             val lightInfo = findViewById<TextView>(R.id.light_info)
             val light = s.nextLight
-            if (light != null) {
-                lightInfo.text = getString(R.string.light_distance, formatDistance(s.nextLightDistance))
-                lightInfo.visibility = View.VISIBLE
+            // Yakında ışık varsa mesafesi, yoksa rotadaki ışık durumu (yükleniyor / kaç ışık / alınamadı).
+            val lightText = if (light != null) {
+                getString(R.string.light_distance, formatDistance(s.nextLightDistance))
             } else {
-                lightInfo.visibility = View.GONE
+                NavSession.lightsText(s)
             }
+            lightInfo.text = lightText
+            lightInfo.visibility = if (lightText != null) View.VISIBLE else View.GONE
             val p = s.progress
             when {
                 s.rerouting -> showGuidanceMessage("⟲", getString(R.string.rerouting))
@@ -566,7 +568,7 @@ class MainActivity : AppCompatActivity() {
             routeInfo.text = when {
                 dest == null -> ""
                 s.calculating -> "Rota hesaplanıyor…"
-                r != null -> "${dest.name}\n${formatSummary(r)}"
+                r != null -> "${dest.name}\n${formatSummary(r)}" + (NavSession.lightsText(s)?.let { "\n$it" } ?: "")
                 else -> dest.name
             }
             startNavButton.isEnabled = r != null && !s.calculating

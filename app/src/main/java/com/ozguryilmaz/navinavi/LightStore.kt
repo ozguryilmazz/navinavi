@@ -22,7 +22,7 @@ data class LightRecord(
  * Trafik ışığı kayıtları telefonda SQLite'ta tutulur (tahmin bu kayıtlardan öğrenilecek).
  * Room yerine düz SQLite: ek derleme eklentisi (KSP) gerektirmiyor, tek tablo için yeterli.
  */
-class LightStore(context: Context) : SQLiteOpenHelper(context.applicationContext, "lights.db", null, 1) {
+class LightStore(context: Context) : SQLiteOpenHelper(context.applicationContext, "lights.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -38,9 +38,61 @@ class LightStore(context: Context) : SQLiteOpenHelper(context.applicationContext
             )"""
         )
         db.execSQL("CREATE INDEX records_light ON records(light_key, time_ms)")
+        createOsmTable(db)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) createOsmTable(db)
+    }
+
+    /** OSM'den gelen ışık konumları: aynı yolda bir dahakine sunucuyu beklemeden çıksın. */
+    private fun createOsmTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS osm_lights (
+                node_id INTEGER PRIMARY KEY,
+                lat REAL NOT NULL,
+                lon REAL NOT NULL,
+                seen_ms INTEGER NOT NULL
+            )"""
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS osm_lights_pos ON osm_lights(lat, lon)")
+    }
+
+    fun saveOsm(nodes: List<OsmLight>) {
+        val db = writableDatabase
+        val now = System.currentTimeMillis()
+        db.beginTransaction()
+        try {
+            for (n in nodes) {
+                db.insertWithOnConflict("osm_lights", null, ContentValues().apply {
+                    put("node_id", n.id)
+                    put("lat", n.position.latitude)
+                    put("lon", n.position.longitude)
+                    put("seen_ms", now)
+                }, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Kutulardan herhangi birinin içindeki saklı OSM ışıkları. */
+    fun osmIn(boxes: List<Box>): List<OsmLight> {
+        val found = LinkedHashMap<Long, OsmLight>()
+        for (b in boxes) {
+            readableDatabase.rawQuery(
+                "SELECT node_id, lat, lon FROM osm_lights WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?",
+                arrayOf(b.s.toString(), b.n.toString(), b.w.toString(), b.e.toString()),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val id = c.getLong(0)
+                    found[id] = OsmLight(id, org.maplibre.android.geometry.LatLng(c.getDouble(1), c.getDouble(2)))
+                }
+            }
+        }
+        return found.values.toList()
+    }
 
     fun add(light: RouteLight, kind: LightRecord.Kind, timeMs: Long, source: LightRecord.Source) {
         writableDatabase.insert("records", null, ContentValues().apply {

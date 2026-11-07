@@ -12,6 +12,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -41,7 +43,10 @@ object NavSession {
         /** 200 m içindeki sıradaki ışık; yoksa null. */
         val nextLight: RouteLight? = null,
         val nextLightDistance: Double = 0.0,
+        val lightsStatus: LightsStatus = LightsStatus.NONE,
     )
+
+    enum class LightsStatus { NONE, LOADING, OK, FAILED }
 
     sealed interface Event {
         data object Arrived : Event
@@ -164,20 +169,60 @@ object NavSession {
 
     // ---- Trafik ışıkları ----
 
-    /** Rota üzerindeki ışıkları arka planda çeker; başarısız olursa navigasyon ışıksız sürer. */
+    /**
+     * Rota üzerindeki ışıklar: önce telefonda saklı olanlar hemen gösterilir, sonra sunucudan
+     * güncel liste istenir. Sunucular yavaşsa ya da cevap vermezse birkaç kez daha denenir.
+     */
     private fun loadLights(r: Route) {
         lightsJob?.cancel()
-        _state.update { it.copy(lights = emptyList(), nextLight = null) }
+        _state.update { it.copy(lights = emptyList(), nextLight = null, lightsStatus = LightsStatus.LOADING) }
         lightsJob = scope.launch {
-            try {
-                val lights = TrafficLights.along(r)
-                if (_state.value.route === r) _state.update { it.copy(lights = lights) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Trafik ışıkları alınamadı", e)
+            val boxes = TrafficLights.boxes(r)
+            val cachedNodes = withContext(Dispatchers.IO) {
+                try {
+                    store.osmIn(boxes)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Saklı ışıklar okunamadı", e)
+                    emptyList()
+                }
+            }
+            val cached = TrafficLights.match(r, cachedNodes)
+            if (_state.value.route !== r) return@launch
+            if (cached.isNotEmpty()) _state.update { it.copy(lights = cached) }
+            for ((attempt, wait) in LIGHT_RETRY_MS.withIndex()) {
+                if (wait > 0) delay(wait)
+                try {
+                    val nodes = TrafficLights.fetch(r)
+                    withContext(Dispatchers.IO) {
+                        runCatching { store.saveOsm(nodes) }.onFailure { Log.w(TAG, "Işıklar saklanamadı", it) }
+                    }
+                    if (_state.value.route !== r) return@launch
+                    // Kullanıcının kendi eklediği ışıklar (eksi kimlik) OSM listesinde yok; onları da koru.
+                    val mine = cachedNodes.filter { it.id < 0 } +
+                        _state.value.lights.filter { it.nodeId < 0 }.map { OsmLight(it.nodeId, it.position) }
+                    val lights = TrafficLights.match(r, nodes + mine)
+                    _state.update { it.copy(lights = lights, lightsStatus = LightsStatus.OK) }
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Trafik ışıkları alınamadı (deneme ${attempt + 1})", e)
+                    if (_state.value.route !== r) return@launch
+                    // Saklı ışık varsa onlarla devam; yoksa ekranda "alınamadı" yazsın, arkada denemeye devam.
+                    _state.update {
+                        it.copy(lightsStatus = if (cached.isNotEmpty()) LightsStatus.OK else LightsStatus.FAILED)
+                    }
+                }
             }
         }
+    }
+
+    /** Işık durumu, ekranda kısa bir satır olarak; gösterilecek bir şey yoksa null. */
+    fun lightsText(s: State): String? = when (s.lightsStatus) {
+        LightsStatus.NONE -> null
+        LightsStatus.LOADING -> if (s.lights.isEmpty()) "🚦 Işıklar yükleniyor…" else "🚦 Rotada ${s.lights.size} ışık"
+        LightsStatus.OK -> if (s.lights.isEmpty()) "🚦 Rotada bilinen ışık yok" else "🚦 Rotada ${s.lights.size} ışık"
+        LightsStatus.FAILED -> "🚦 Işık bilgisi alınamadı, tekrar deneniyor"
     }
 
     /**
@@ -194,12 +239,40 @@ object NavSession {
         val light = s.lights
             .filter { it.routeOffset - p.traveled in -40.0..250.0 }
             .minByOrNull { kotlin.math.abs(it.routeOffset - p.traveled) }
+        val done = if (kind == LightRecord.Kind.GREEN) "🟢 Yeşil kaydedildi" else "🔴 Kırmızı kaydedildi"
         if (light == null) {
-            _events.tryEmit(Event.Info("Yakında bilinen trafik ışığı yok"))
+            // OSM'de bu ışık yok: bulunduğum yere kendi ışığımı ekle, kaydı ona bağla.
+            val added = addUserLight(s) ?: return
+            save(added, kind, gpsNow(), LightRecord.Source.USER)
+            _events.tryEmit(Event.Info("🚦 Yeni ışık eklendi · $done"))
             return
         }
         save(light, kind, gpsNow(), LightRecord.Source.USER)
-        _events.tryEmit(Event.Info(if (kind == LightRecord.Kind.GREEN) "🟢 Yeşil kaydedildi" else "🔴 Kırmızı kaydedildi"))
+        _events.tryEmit(Event.Info(done))
+    }
+
+    /**
+     * Haritada olmayan bir ışığı bulunduğum yere ekler. Kimliği eksi sayı (OSM düğümleriyle
+     * karışmasın); telefonda saklanır, aynı yoldan bir dahaki geçişte de rotada görünür.
+     */
+    private fun addUserLight(s: State): RouteLight? {
+        val loc = s.location
+        val r = s.route
+        if (loc == null || r == null) {
+            _events.tryEmit(Event.Info("Konum bulunamadı, ışık eklenemedi"))
+            return null
+        }
+        val node = OsmLight(-System.currentTimeMillis(), LatLng(loc.latitude, loc.longitude))
+        val light = TrafficLights.match(r, listOf(node)).firstOrNull()
+        if (light == null) {
+            _events.tryEmit(Event.Info("Rotanın üzerinde değilsiniz, ışık eklenemedi"))
+            return null
+        }
+        _state.update { it.copy(lights = (it.lights + light).sortedBy { l -> l.routeOffset }) }
+        scope.launch(Dispatchers.IO) {
+            runCatching { store.saveOsm(listOf(node)) }.onFailure { Log.e(TAG, "Işık saklanamadı", it) }
+        }
+        return light
     }
 
     /**
@@ -285,6 +358,8 @@ object NavSession {
 
     private const val TAG = "NavSession"
     private const val LIGHT_SHOW_M = 200.0
+    /** Işık sunucusu cevap vermezse bekleme süreleri (ilk deneme hemen). */
+    private val LIGHT_RETRY_MS = longArrayOf(0, 30_000, 90_000, 180_000, 300_000)
     /** Işığın birkaç metre ötesine geçince sıradakine geçilir. */
     private const val LIGHT_PASSED_M = 5.0
     private const val STOP_MPS = 1.0f
