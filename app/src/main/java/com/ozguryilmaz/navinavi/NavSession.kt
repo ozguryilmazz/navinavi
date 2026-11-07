@@ -236,19 +236,28 @@ object NavSession {
             _events.tryEmit(Event.Info("Işık kaydı için önce navigasyonu başlatın"))
             return
         }
-        val light = s.lights
-            .filter { it.routeOffset - p.traveled in -40.0..250.0 }
-            .minByOrNull { kotlin.math.abs(it.routeOffset - p.traveled) }
+        // Sürücü hep öndeki ışığa bakar: önce öndeki ilk ışık (500 m'ye kadar); o yoksa
+        // altından az önce geçilen ışık (40 m geride).
+        val light = s.lights.firstOrNull { it.routeOffset - p.traveled in -LIGHT_PASSED_M..RECORD_AHEAD_M }
+            ?: s.lights.lastOrNull { it.routeOffset - p.traveled in -RECORD_BEHIND_M..-LIGHT_PASSED_M }
         val done = if (kind == LightRecord.Kind.GREEN) "🟢 Yeşil kaydedildi" else "🔴 Kırmızı kaydedildi"
         if (light == null) {
-            // OSM'de bu ışık yok: bulunduğum yere kendi ışığımı ekle, kaydı ona bağla.
+            // Haritada ışık yok. Uzaktaki bir ışığı yanlış yere eklememek için sadece yavaşken
+            // (ışıkta beklerken ya da yaklaşırken) bulunduğum yere kendi ışığımı eklerim.
+            val speed = s.location?.takeIf { it.hasSpeed() }?.speed ?: 0f
+            if (speed > ADD_LIGHT_MAX_MPS) {
+                _events.tryEmit(Event.Info("Haritada ışık yok. Yeni ışık eklemek için ışıkta beklerken basın"))
+                return
+            }
             val added = addUserLight(s) ?: return
             save(added, kind, gpsNow(), LightRecord.Source.USER)
-            _events.tryEmit(Event.Info("🚦 Yeni ışık eklendi · $done"))
+            _events.tryEmit(Event.Info("🚦 Yeni ışık buraya eklendi · $done"))
             return
         }
         save(light, kind, gpsNow(), LightRecord.Source.USER)
-        _events.tryEmit(Event.Info(done))
+        val d = light.routeOffset - p.traveled
+        val where = if (d < 15) "bu ışık" else "${formatDistance(d)} ilerideki ışık"
+        _events.tryEmit(Event.Info("$done · $where"))
     }
 
     /**
@@ -358,6 +367,12 @@ object NavSession {
 
     private const val TAG = "NavSession"
     private const val LIGHT_SHOW_M = 200.0
+    /** 🟢/🔴 kaydı öndeki ışığa en fazla bu mesafeden bağlanır (m). */
+    private const val RECORD_AHEAD_M = 500.0
+    /** Öndeki ışık yoksa, bu kadar geride kalan ışığa bağlanır (m). */
+    private const val RECORD_BEHIND_M = 40.0
+    /** Yeni ışık sadece bu hızın altındayken eklenir (~25 km/sa). */
+    private const val ADD_LIGHT_MAX_MPS = 7f
     /** Işık sunucusu cevap vermezse bekleme süreleri (ilk deneme hemen). */
     private val LIGHT_RETRY_MS = longArrayOf(0, 30_000, 90_000, 180_000, 300_000)
     /** Işığın birkaç metre ötesine geçince sıradakine geçilir. */
