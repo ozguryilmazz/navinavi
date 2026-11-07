@@ -167,7 +167,8 @@ Kullanıcı "espirili ses kayıtları olur" dedi. Öneri listesi:
   - `NavSession.recordLight()`: en yakın ışık (−40…+250 m), GPS saati. `autoRecord()`: ışığa 30 m içinde ≥5 sn duruş → kalkışta AUTO yeşil (−3 sn).
   - Android Auto action strip: en fazla 4 düğme, **sadece 1 yazılı** (diğerleri ikonlu) — bu kurala uy.
 - **Işık düzeltmesi (b21, yayımlandı):** Overpass sunucuları çok yavaş (20–45 sn), ışıklar sessizce gelmiyordu. Artık 4 sunucuya paralel sorgu (rota boyunca 3 km'lik kutular, `out skel`, toplam 70 sn), gelen ışıklar `lights.db` → `osm_lights` tablosunda saklanır (önce saklılar gösterilir), başarısızlıkta 30 sn/1,5/3/5 dk sonra yeniden dener, ekranda `NavSession.lightsText()` durumu. Yakında ışık yokken 🟢/🔴 → bulunduğun yere **kullanıcı ışığı** (eksi düğüm id) eklenir.
-- **Sıradaki:** 7. adım 2. kısım — döngü süresi tahmini, "Tahmini yeşil: ~23 sn", hız önerisi. Önce kullanıcı birkaç gün kayıt toplasın.
+- **Işık seçimi düzeltmesi (b22/b23):** 🟢/🔴 kaydı öndeki ilk ışığa (500 m'ye kadar), o yoksa 40 m geride kalana bağlanır. Haritada ışık yoksa yeni ışık sadece ~25 km/sa altındayken eklenir. Mesajda mesafe yazar ("🟢 Yeşil kaydedildi · 320 m ilerideki ışık"). Kullanıcı ışıkların telefonda yüklendiğini doğruladı.
+- **Sıradaki:** 7. adım 2. kısım — döngü süresi tahmini, "Tahmini yeşil: ~23 sn", hız önerisi (≤ hız sınırı, ~500 m kala, aynı ışık için 1–2 kez), ışık başına tahmin isabet oranı, "Kayıtları paylaş" (CSV, paylaş menüsü; repoda `kayitlar/` gitignore'da). Kullanıcı bu arada kayıt topluyor.
 - Kısıt: Işık kaydı sadece navigasyon açıkken (ışıklar rotadan çekiliyor). Asıl amaç trafik ışığı (7. adım) olduğu için Android Auto'dan sonra sırayı kullanıcıyla konuş; 7. adımı 6'dan önce almak mantıklı olabilir.
 - Yerel derleme yok (bilgisayarda SSL engeli); derleme sadece GitHub Actions'ta. `gh` CLI kurulu değil, durum public API ile `curl` üzerinden okunuyor.
 
