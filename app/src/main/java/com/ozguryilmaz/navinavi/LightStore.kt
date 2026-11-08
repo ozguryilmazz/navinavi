@@ -22,7 +22,7 @@ data class LightRecord(
  * Trafik ışığı kayıtları telefonda SQLite'ta tutulur (tahmin bu kayıtlardan öğrenilecek).
  * Room yerine düz SQLite: ek derleme eklentisi (KSP) gerektirmiyor, tek tablo için yeterli.
  */
-class LightStore(context: Context) : SQLiteOpenHelper(context.applicationContext, "lights.db", null, 2) {
+class LightStore(context: Context) : SQLiteOpenHelper(context.applicationContext, "lights.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -39,10 +39,74 @@ class LightStore(context: Context) : SQLiteOpenHelper(context.applicationContext
         )
         db.execSQL("CREATE INDEX records_light ON records(light_key, time_ms)")
         createOsmTable(db)
+        createChecksTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createOsmTable(db)
+        if (oldVersion < 3) createChecksTable(db)
+    }
+
+    /** Tahmin isabet kontrolü: tahmin edilen an ile kullanıcının bastığı an arasındaki fark. */
+    private fun createChecksTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS checks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                light_key TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                error_ms INTEGER NOT NULL,
+                time_ms INTEGER NOT NULL
+            )"""
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS checks_light ON checks(light_key, time_ms)")
+    }
+
+    fun addCheck(lightKey: String, kind: LightRecord.Kind, errorMs: Long, timeMs: Long) {
+        writableDatabase.insert("checks", null, ContentValues().apply {
+            put("light_key", lightKey)
+            put("kind", kind.name)
+            put("error_ms", errorMs)
+            put("time_ms", timeMs)
+        })
+    }
+
+    /** Son kontrollerdeki hata (ms), yeniden eskiye. */
+    fun checkErrorsFor(lightKey: String, limit: Int = 20): List<Long> {
+        val list = mutableListOf<Long>()
+        readableDatabase.rawQuery(
+            "SELECT error_ms FROM checks WHERE light_key = ? ORDER BY time_ms DESC LIMIT $limit", arrayOf(lightKey),
+        ).use { c -> while (c.moveToNext()) list += c.getLong(0) }
+        return list
+    }
+
+    /** Bütün kayıtlar ve tahmin kontrolleri, CSV (Excel'de açılır). Dönüş: (metin, kayıt sayısı, ışık sayısı). */
+    fun exportCsv(): Triple<String, Int, Int> {
+        val sb = StringBuilder()
+        sb.append("tur,isik,osm_dugum,enlem,boylam,renk,zaman,zaman_ms,kaynak_veya_hata_ms\n")
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+        var n = 0
+        val lights = HashSet<String>()
+        readableDatabase.rawQuery(
+            "SELECT light_key, node_id, lat, lon, kind, time_ms, source FROM records ORDER BY light_key, time_ms", null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                val t = c.getLong(5)
+                sb.append("kayit,").append(c.getString(0)).append(',').append(c.getLong(1)).append(',')
+                    .append(c.getDouble(2)).append(',').append(c.getDouble(3)).append(',')
+                    .append(c.getString(4)).append(',').append(fmt.format(java.util.Date(t))).append(',')
+                    .append(t).append(',').append(c.getString(6)).append('\n')
+                n++
+                lights += c.getString(0)
+            }
+        }
+        readableDatabase.rawQuery("SELECT light_key, kind, error_ms, time_ms FROM checks ORDER BY time_ms", null).use { c ->
+            while (c.moveToNext()) {
+                val t = c.getLong(3)
+                sb.append("kontrol,").append(c.getString(0)).append(",,,,").append(c.getString(1)).append(',')
+                    .append(fmt.format(java.util.Date(t))).append(',').append(t).append(',').append(c.getLong(2)).append('\n')
+            }
+        }
+        return Triple(sb.toString(), n, lights.size)
     }
 
     /** OSM'den gelen ışık konumları: aynı yolda bir dahakine sunucuyu beklemeden çıksın. */

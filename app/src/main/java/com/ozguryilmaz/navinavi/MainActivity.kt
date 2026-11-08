@@ -98,6 +98,7 @@ class MainActivity : AppCompatActivity() {
         updateStatus = findViewById(R.id.update_status)
         updateButton.setOnClickListener { update() }
         findViewById<Button>(R.id.key_button).setOnClickListener { askTomtomKey() }
+        findViewById<Button>(R.id.export_button).setOnClickListener { shareRecords() }
         findViewById<View>(R.id.my_location).apply {
             setOnClickListener { followMe() }
             setOnLongClickListener { saveCurrentLocation(); true }
@@ -546,15 +547,25 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             val lightInfo = findViewById<TextView>(R.id.light_info)
-            val light = s.nextLight
-            // Yakında ışık varsa mesafesi, yoksa rotadaki ışık durumu (yükleniyor / kaç ışık / alınamadı).
-            val lightText = if (light != null) {
-                getString(R.string.light_distance, formatDistance(s.nextLightDistance))
-            } else {
-                NavSession.lightsText(s)
-            }
+            // Yakında ışık varsa mesafesi ve tahmini, yoksa rotadaki ışık durumu (yükleniyor / kaç ışık / alınamadı).
+            val lightText = NavSession.lightLine(s) ?: NavSession.lightsText(s)
             lightInfo.text = lightText
             lightInfo.visibility = if (lightText != null) View.VISIBLE else View.GONE
+            val adviceView = findViewById<TextView>(R.id.light_advice)
+            val advice = s.lightAdvice
+            if (advice != null) {
+                adviceView.text = SpeedAdvisor.text(advice)
+                adviceView.setTextColor(
+                    when (advice) {
+                        SpeedAdvice.Keep -> 0xFF2E7D32.toInt()
+                        is SpeedAdvice.Change -> 0xFF1565C0.toInt()
+                        is SpeedAdvice.Stop -> 0xFFC62828.toInt()
+                    }
+                )
+                adviceView.visibility = View.VISIBLE
+            } else {
+                adviceView.visibility = View.GONE
+            }
             val p = s.progress
             when {
                 s.rerouting -> showGuidanceMessage("⟲", getString(R.string.rerouting))
@@ -572,6 +583,35 @@ class MainActivity : AppCompatActivity() {
                 else -> dest.name
             }
             startNavButton.isEnabled = r != null && !s.calculating
+        }
+    }
+
+    /** Işık kayıtlarını CSV dosyası olarak paylaşma menüsüyle gönderir (WhatsApp, e-posta, Drive…). */
+    private fun shareRecords() {
+        NavSession.init(this)
+        lifecycleScope.launch {
+            try {
+                val (file, n, lights) = NavSession.exportRecords(java.io.File(cacheDir, "kayitlar"))
+                if (n == 0) {
+                    Toast.makeText(this@MainActivity, "Henüz ışık kaydı yok", Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    this@MainActivity, "$packageName.fileprovider", file,
+                )
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/csv"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_SUBJECT, "NaviNavi ışık kayıtları")
+                    putExtra(Intent.EXTRA_TEXT, "NaviNavi: $lights ışıkta $n kayıt")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(send, "$lights ışıkta $n kayıt — nereye gönderilsin?"))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, "Kayıtlar dışa verilemedi: ${e.message}", Toast.LENGTH_LONG).show()
+            }
         }
     }
 

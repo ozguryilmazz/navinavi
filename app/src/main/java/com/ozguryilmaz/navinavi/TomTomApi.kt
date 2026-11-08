@@ -11,7 +11,13 @@ import java.net.URLEncoder
 import java.util.Locale
 
 /** Kullanıcıya gösterilebilecek Türkçe mesajlı hata. */
-class TomTomException(message: String) : Exception(message)
+open class TomTomException(message: String) : Exception(message)
+
+/** HTTP 400: istek TomTom'a uymadı (ör. desteklenmeyen parametre ya da rota yok). */
+class TomTomBadRequest(message: String) : TomTomException(message)
+
+/** Rotanın bir kısmındaki yasal hız sınırı (rota başından metre olarak). */
+data class SpeedLimitSection(val startMeters: Double, val endMeters: Double, val kmh: Int)
 
 data class Place(val name: String, val address: String, val position: LatLng)
 
@@ -29,7 +35,13 @@ data class Route(
     val travelTimeSeconds: Int,
     val trafficDelaySeconds: Int,
     val instructions: List<Instruction>,
-)
+    /** Yasal hız sınırları; TomTom vermezse boş. */
+    val speedLimits: List<SpeedLimitSection> = emptyList(),
+) {
+    /** Rota üzerinde bu noktadaki hız sınırı (km/sa), bilinmiyorsa null. */
+    fun speedLimitAt(offsetMeters: Double): Int? =
+        speedLimits.firstOrNull { offsetMeters >= it.startMeters && offsetMeters <= it.endMeters }?.kmh
+}
 
 /**
  * TomTom Search ve Routing API'leri. Ücretsiz planda günde 2.500 istek var;
@@ -81,7 +93,14 @@ class TomTomApi(private val apiKeys: ApiKeys) {
         val locations = "${fmt(from.latitude)},${fmt(from.longitude)}:${fmt(to.latitude)},${fmt(to.longitude)}"
         val params = "traffic=true&travelMode=car&instructionsType=tagged&language=tr-TR" +
             "&routeRepresentation=polyline&sectionType=traffic"
-        val json = get("https://api.tomtom.com/routing/1/calculateRoute/$locations/json?$params")
+        val base = "https://api.tomtom.com/routing/1/calculateRoute/$locations/json?$params"
+        // Hız sınırları (hız önerisi için) ayrı bölüm olarak istenir. TomTom bunu reddederse
+        // rota yine de sınırsız haliyle alınır, navigasyon aksamaz.
+        val json = try {
+            get("$base&sectionType=speedLimit")
+        } catch (e: TomTomBadRequest) {
+            get(base)
+        }
         val routes = json.optJSONArray("routes")
         if (routes == null || routes.length() == 0) throw TomTomException("Bu noktaya rota bulunamadı.")
         val r = routes.getJSONObject(0)
@@ -113,12 +132,30 @@ class TomTomApi(private val apiKeys: ApiKeys) {
             }
         }
 
+        // Hız sınırı bölümleri nokta numarasıyla gelir; rota boyunca metreye çevrilir.
+        val cumulative = DoubleArray(points.size)
+        for (i in 1 until points.size) cumulative[i] = cumulative[i - 1] + Navigator.distance(points[i - 1], points[i])
+        val limits = mutableListOf<SpeedLimitSection>()
+        val sections = r.optJSONArray("sections")
+        if (sections != null) {
+            for (i in 0 until sections.length()) {
+                val sec = sections.getJSONObject(i)
+                if (sec.optString("sectionType") != "SPEED_LIMIT") continue
+                val kmh = sec.optInt("maxSpeedLimitInKmh", 0)
+                val a = sec.optInt("startPointIndex", -1)
+                val b = sec.optInt("endPointIndex", -1)
+                if (kmh <= 0 || a !in points.indices || b !in points.indices) continue
+                limits += SpeedLimitSection(cumulative[a], cumulative[b], kmh)
+            }
+        }
+
         return Route(
             points = points,
             lengthMeters = summary.optInt("lengthInMeters"),
             travelTimeSeconds = summary.optInt("travelTimeInSeconds"),
             trafficDelaySeconds = summary.optInt("trafficDelayInSeconds"),
             instructions = instructions,
+            speedLimits = limits,
         )
     }
 
@@ -132,7 +169,7 @@ class TomTomApi(private val apiKeys: ApiKeys) {
         try {
             when (val code = conn.responseCode) {
                 200 -> JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                400 -> throw TomTomException("Bu noktaya rota bulunamadı.")
+                400 -> throw TomTomBadRequest("Bu noktaya rota bulunamadı.")
                 401, 403 -> throw TomTomException(
                     "TomTom isteği reddetti ($code). Günlük ücretsiz kota dolmuş ya da anahtar hatalı olabilir. " +
                         "Kota her gün sıfırlanır; ücret çıkmaz."

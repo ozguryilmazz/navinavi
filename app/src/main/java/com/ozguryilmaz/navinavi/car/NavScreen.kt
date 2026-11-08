@@ -95,10 +95,8 @@ class NavScreen(carContext: CarContext, private val renderer: CarMapRenderer) : 
         val p = s.progress
         val next = p?.next
         if (s.rerouting || p == null || next == null) return RoutingInfo.Builder().setLoading(true).build()
-        // Işığa 200 m kalınca mesafesi manevra yazısının başında gösterilir.
-        val light = s.nextLight?.let {
-            carContext.getString(R.string.car_light_distance, formatDistance(s.nextLightDistance))
-        }
+        // Işık yaklaşınca mesafesi, tahmini ve hız önerisi manevra yazısının başında gösterilir.
+        val light = NavSession.carLightText(s)
         val ri = RoutingInfo.Builder().setCurrentStep(step(next, light), CarGuidance.distance(p.distanceToNext))
         // Sıradaki iki manevra birbirine yakınsa ikincisini de önceden göster.
         val after = p.afterNext

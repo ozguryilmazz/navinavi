@@ -40,10 +40,14 @@ object NavSession {
         val location: Location? = null,
         /** Rota üzerindeki trafik ışıkları (OSM), rota başından uzaklığa göre sıralı. */
         val lights: List<RouteLight> = emptyList(),
-        /** 200 m içindeki sıradaki ışık; yoksa null. */
+        /** Gösterilen sıradaki ışık (200 m içinde; tahmini varsa 600 m içinde); yoksa null. */
         val nextLight: RouteLight? = null,
         val nextLightDistance: Double = 0.0,
         val lightsStatus: LightsStatus = LightsStatus.NONE,
+        /** Sıradaki ışığın tahmini, ör. "Tahmini yeşil: ~23 sn"; tahmin yoksa null. */
+        val lightForecast: String? = null,
+        /** Yeşili yakalamak için hız önerisi; güvenilir tahmin yoksa null. */
+        val lightAdvice: SpeedAdvice? = null,
     )
 
     enum class LightsStatus { NONE, LOADING, OK, FAILED }
@@ -73,6 +77,14 @@ object NavSession {
     private var stoppedSince = 0L
     /** Işık anahtarı → o ışığa en son kayıt (kullanıcı ya da otomatik) yapılan an (elapsedRealtime). */
     private val lastRecordAt = HashMap<String, Long>()
+    /** Işık anahtarı → kayıtları (bellekte; tahmin her saniye bunlardan hesaplanır). */
+    private val records = HashMap<String, MutableList<LightRecord>>()
+    /** Işık anahtarı → son tahmin kontrollerinin hataları (ms), yeniden eskiye. */
+    private val checkErrors = HashMap<String, MutableList<Long>>()
+    /** Işık anahtarı → en son yapılan tahmin ve zamanı (elapsedRealtime); basışta isabet kontrolü için. */
+    private val lastForecast = HashMap<String, Pair<LightForecast, Long>>()
+    /** Ekranda titreşmesin diye son gösterilen hız önerisi (ışık anahtarı ile). */
+    private var shownAdvice: Pair<String, SpeedAdvice>? = null
 
     fun init(context: Context) {
         if (!::app.isInitialized) app = context.applicationContext
@@ -126,7 +138,13 @@ object NavSession {
         if (!_state.value.navigating) return
         navigator = null
         stopLight = null
-        _state.update { it.copy(navigating = false, rerouting = false, progress = null, nextLight = null) }
+        shownAdvice = null
+        _state.update {
+            it.copy(
+                navigating = false, rerouting = false, progress = null, nextLight = null,
+                lightForecast = null, lightAdvice = null,
+            )
+        }
         app.stopService(Intent(app, NavigationService::class.java))
     }
 
@@ -162,9 +180,129 @@ object NavSession {
         }
         val light = s.lights.firstOrNull { it.routeOffset > p.traveled - LIGHT_PASSED_M }
         val lightDist = light?.let { it.routeOffset - p.traveled } ?: 0.0
-        val shown = light?.takeIf { lightDist <= LIGHT_SHOW_M }
-        _state.update { it.copy(progress = p, nextLight = shown, nextLightDistance = lightDist.coerceAtLeast(0.0)) }
+        val now = gpsNow()
+        val forecast = light?.takeIf { lightDist <= FORECAST_M }?.let { forecastFor(it, now) }
+        val shown = light?.takeIf { lightDist <= LIGHT_SHOW_M || (forecast != null && lightDist <= FORECAST_M) }
+        val forecastText = if (shown != null && forecast != null) LightPredictor.text(forecast, now) else null
+        val advice = if (shown != null && forecast != null && forecastText != null) {
+            adviceFor(shown, forecast, lightDist, location, s.route, now)
+        } else {
+            null
+        }
+        _state.update {
+            it.copy(
+                progress = p, nextLight = shown, nextLightDistance = lightDist.coerceAtLeast(0.0),
+                lightForecast = forecastText, lightAdvice = advice,
+            )
+        }
         autoRecord(location, p.traveled, s.lights)
+    }
+
+    // ---- Işık tahmini ve hız önerisi ----
+
+    private fun forecastFor(light: RouteLight, now: Long): LightForecast? {
+        val recs = records[light.key] ?: return null
+        val f = LightPredictor.forecast(recs, now) ?: return null
+        lastForecast[light.key] = f to SystemClock.elapsedRealtime()
+        return f
+    }
+
+    private fun adviceFor(
+        light: RouteLight, f: LightForecast, distance: Double, location: Location, route: Route?, now: Long,
+    ): SpeedAdvice? {
+        // Tahmin güvenilir değilse ya da bu ışıkta sık şaştıysa sadece süre gösterilir.
+        if (!f.confident || unreliable(light.key)) return null
+        val limit = route?.speedLimitAt(light.routeOffset) ?: DEFAULT_LIMIT_KMH
+        val speed = if (location.hasSpeed()) location.speed.toDouble() else 0.0
+        val windows = f.windows.map { (it.startMs - now) / 1000.0 to (it.endMs - now) / 1000.0 }
+        val a = SpeedAdvisor.advise(distance, speed, limit.toDouble(), windows)
+        if (a == null) {
+            shownAdvice = null
+            return null
+        }
+        // Önerilen hız her saniye 1–2 km/sa oynamasın: küçük değişimde eskisi kalır.
+        val prev = shownAdvice?.takeIf { it.first == light.key }?.second
+        val result = if (prev is SpeedAdvice.Change && a is SpeedAdvice.Change &&
+            prev.faster == a.faster && kotlin.math.abs(prev.kmh - a.kmh) <= 3
+        ) prev else a
+        shownAdvice = light.key to result
+        return result
+    }
+
+    /** Bu ışıkta son kontrollerin yarısından fazlası 5 sn'den çok şaştıysa hız önerisi verilmez. */
+    private fun unreliable(key: String): Boolean {
+        val errs = checkErrors[key] ?: return false
+        if (errs.size < 5) return false
+        val hits = errs.count { kotlin.math.abs(it) <= CHECK_HIT_MS }
+        return hits * 2 < errs.size
+    }
+
+    /**
+     * Kullanıcı bastığında, basıştan hemen önceki tahminle karşılaştırır. Dönüş: hata (ms;
+     * + geç, − erken) ya da karşılaştırılacak tahmin yoksa null.
+     */
+    private fun checkPrediction(key: String, kind: LightRecord.Kind, timeMs: Long): Long? {
+        val (f, at) = lastForecast[key] ?: return null
+        if (SystemClock.elapsedRealtime() - at > 5_000) return null
+        val predicted = when (kind) {
+            LightRecord.Kind.GREEN -> f.windows.map { it.startMs }
+            LightRecord.Kind.RED -> f.windows.filter { !it.endAssumed }.map { it.endMs }
+        }.minByOrNull { kotlin.math.abs(it - timeMs) } ?: return null
+        val err = timeMs - predicted
+        if (kotlin.math.abs(err) > 30_000) return null
+        checkErrors.getOrPut(key) { mutableListOf() }.add(0, err)
+        scope.launch(Dispatchers.IO) {
+            runCatching { store.addCheck(key, kind, err, timeMs) }.onFailure { Log.w(TAG, "Kontrol yazılamadı", it) }
+        }
+        return err
+    }
+
+    /** Rotadaki ışıkların kayıtlarını ve isabet geçmişini belleğe alır (bir kez). */
+    private fun loadRecords(lights: List<RouteLight>) {
+        val missing = lights.map { it.key }.filter { it !in records }
+        if (missing.isEmpty()) return
+        scope.launch {
+            val loaded = withContext(Dispatchers.IO) {
+                missing.associateWith { key ->
+                    runCatching { store.recordsFor(key) to store.checkErrorsFor(key) }.getOrNull()
+                }
+            }
+            for ((key, v) in loaded) {
+                if (v == null) continue
+                // Bu arada basılmış (bellekte olan) kayıtlarla birleştir.
+                val mem = records[key].orEmpty()
+                records[key] = (v.first + mem).distinctBy { it.timeMs to it.kind }.sortedBy { it.timeMs }.toMutableList()
+                if (key !in checkErrors) checkErrors[key] = v.second.toMutableList()
+            }
+        }
+    }
+
+    /** Telefon ekranı için ışık satırı: "🚦 Işık: 320 m · Tahmini yeşil: ~23 sn". */
+    fun lightLine(s: State): String? {
+        if (s.nextLight == null) return null
+        val base = "🚦 Işık: ${formatDistance(s.nextLightDistance)}"
+        return if (s.lightForecast != null) "$base · ${s.lightForecast}" else base
+    }
+
+    /** Araba ekranı için kısa ışık yazısı: "Işık 320 m · yeşil ~23 sn · ~38 km/sa'ye yavaşla". */
+    fun carLightText(s: State): String? {
+        if (s.nextLight == null) return null
+        val parts = mutableListOf("Işık ${formatDistance(s.nextLightDistance)}")
+        s.lightForecast?.let { parts += it.removePrefix("Tahmini ").replace(":", "") }
+        s.lightAdvice?.let { parts += SpeedAdvisor.shortText(it) }
+        return parts.joinToString(" · ")
+    }
+
+    /** Kayıtları CSV dosyası olarak dışa verir. Dönüş: (dosya, kayıt sayısı, ışık sayısı). */
+    suspend fun exportRecords(dir: java.io.File): Triple<java.io.File, Int, Int> = withContext(Dispatchers.IO) {
+        val (csv, n, lights) = store.exportCsv()
+        dir.mkdirs()
+        val name = "navinavi-kayitlar-" +
+            java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.US).format(java.util.Date()) + ".csv"
+        val f = java.io.File(dir, name)
+        // Excel Türkçe karakterleri doğru açsın diye UTF-8 imzası (BOM).
+        f.writeText("﻿" + csv, Charsets.UTF_8)
+        Triple(f, n, lights)
     }
 
     // ---- Trafik ışıkları ----
@@ -188,7 +326,10 @@ object NavSession {
             }
             val cached = TrafficLights.match(r, cachedNodes)
             if (_state.value.route !== r) return@launch
-            if (cached.isNotEmpty()) _state.update { it.copy(lights = cached) }
+            if (cached.isNotEmpty()) {
+                _state.update { it.copy(lights = cached) }
+                loadRecords(cached)
+            }
             for ((attempt, wait) in LIGHT_RETRY_MS.withIndex()) {
                 if (wait > 0) delay(wait)
                 try {
@@ -202,6 +343,7 @@ object NavSession {
                         _state.value.lights.filter { it.nodeId < 0 }.map { OsmLight(it.nodeId, it.position) }
                     val lights = TrafficLights.match(r, nodes + mine)
                     _state.update { it.copy(lights = lights, lightsStatus = LightsStatus.OK) }
+                    loadRecords(lights)
                     return@launch
                 } catch (e: CancellationException) {
                     throw e
@@ -254,10 +396,17 @@ object NavSession {
             _events.tryEmit(Event.Info("🚦 Yeni ışık buraya eklendi · $done"))
             return
         }
-        save(light, kind, gpsNow(), LightRecord.Source.USER)
+        val t = gpsNow()
+        // Basıştan önceki tahmin tuttu mu? (Kayıt eklenmeden önce bakılır.)
+        val err = checkPrediction(light.key, kind, t)
+        save(light, kind, t, LightRecord.Source.USER)
         val d = light.routeOffset - p.traveled
         val where = if (d < 15) "bu ışık" else "${formatDistance(d)} ilerideki ışık"
-        _events.tryEmit(Event.Info("$done · $where"))
+        val check = err?.let {
+            val sec = (kotlin.math.abs(it) + 500) / 1000
+            if (kotlin.math.abs(it) <= CHECK_HIT_MS) " · tahmin tuttu ✓" else " · tahmin $sec sn şaştı"
+        } ?: ""
+        _events.tryEmit(Event.Info("$done · $where$check"))
     }
 
     /**
@@ -278,6 +427,7 @@ object NavSession {
             return null
         }
         _state.update { it.copy(lights = (it.lights + light).sortedBy { l -> l.routeOffset }) }
+        records.getOrPut(light.key) { mutableListOf() }
         scope.launch(Dispatchers.IO) {
             runCatching { store.saveOsm(listOf(node)) }.onFailure { Log.e(TAG, "Işık saklanamadı", it) }
         }
@@ -309,6 +459,7 @@ object NavSession {
 
     private fun save(light: RouteLight, kind: LightRecord.Kind, timeMs: Long, source: LightRecord.Source) {
         lastRecordAt[light.key] = SystemClock.elapsedRealtime()
+        records.getOrPut(light.key) { mutableListOf() }.add(LightRecord(light.key, kind, timeMs, source))
         scope.launch(Dispatchers.IO) {
             try {
                 store.add(light, kind, timeMs, source)
@@ -367,6 +518,12 @@ object NavSession {
 
     private const val TAG = "NavSession"
     private const val LIGHT_SHOW_M = 200.0
+    /** Tahmini olan ışık bu mesafeden itibaren gösterilir (hız önerisi için erken bilmek gerek). */
+    private const val FORECAST_M = 600.0
+    /** Rota hız sınırını vermezse şehir içi yasal sınır varsayılır. */
+    private const val DEFAULT_LIMIT_KMH = 50
+    /** Tahmin bu kadar içinde tuttuysa "isabet" sayılır. */
+    private const val CHECK_HIT_MS = 5_000L
     /** 🟢/🔴 kaydı öndeki ışığa en fazla bu mesafeden bağlanır (m). */
     private const val RECORD_AHEAD_M = 500.0
     /** Öndeki ışık yoksa, bu kadar geride kalan ışığa bağlanır (m). */

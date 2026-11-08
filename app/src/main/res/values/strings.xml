@@ -41,6 +41,7 @@
     <string name="light_red">🔴 Kırmızı</string>
     <string name="light_distance">🚦 Işık: %1$s</string>
     <string name="car_light_distance">Işık %1$s</string>
+    <string name="export_records">Kayıtlar</string>
     <string name="save">Kaydet</string>
     <string name="cancel">Vazgeç</string>
 </resources>

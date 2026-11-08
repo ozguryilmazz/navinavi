@@ -119,6 +119,13 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/key_change" />
+
+            <Button
+                android:id="@+id/export_button"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/export_records" />
         </LinearLayout>
     </LinearLayout>
 
@@ -205,6 +212,17 @@
             android:layout_marginStart="8dp"
             android:textColor="#212121"
             android:textSize="18sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <!-- Yeşili yakalamak için hız önerisi -->
+        <TextView
+            android:id="@+id/light_advice"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginBottom="4dp"
+            android:textSize="20sp"
             android:textStyle="bold"
             android:visibility="gone" />
 
