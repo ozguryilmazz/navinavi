@@ -13,3 +13,6 @@ captures/
 *.jks
 *.keystore
 imza/
+
+# Telefondan paylaşılan ışık kayıtları (konum verisi; herkese açık repoya gitmesin)
+kayitlar/
