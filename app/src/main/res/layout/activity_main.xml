@@ -179,6 +179,16 @@
                     android:textColor="#E0F2F1"
                     android:textSize="18sp" />
             </LinearLayout>
+
+            <TextView
+                android:id="@+id/nav_clock"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top"
+                android:layout_marginStart="8dp"
+                android:textColor="#FFFFFF"
+                android:textSize="22sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <TextView

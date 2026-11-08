@@ -165,6 +165,14 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch { NavSession.state.collect { render(it) } }
                 launch {
+                    // Navigasyon panelindeki saati güncel tut.
+                    val fmt = java.text.SimpleDateFormat("HH:mm", Locale("tr", "TR"))
+                    while (true) {
+                        findViewById<TextView>(R.id.nav_clock).text = fmt.format(java.util.Date())
+                        delay(10_000L)
+                    }
+                }
+                launch {
                     NavSession.events.collect { e ->
                         when (e) {
                             NavSession.Event.Arrived -> AlertDialog.Builder(this@MainActivity)
@@ -296,8 +304,14 @@ class MainActivity : AppCompatActivity() {
             movedOnce -> CameraMode.TRACKING_GPS
             else -> CameraMode.TRACKING_COMPASS
         }
-        // Kullanıcı zaten yakınlaştırdıysa yakınlığına dokunma.
-        if ((map?.cameraPosition?.zoom ?: 0.0) < 14.0) lc.zoomWhileTracking(16.0)
+        if (navUi) {
+            // Navigasyonda "ortala": 2.5D eğik görünümü ve yakınlığı geri getir.
+            lc.tiltWhileTracking(NAV_TILT)
+            lc.zoomWhileTracking(NAV_ZOOM)
+            lc.paddingWhileTracking(doubleArrayOf(0.0, mapView.height * 0.4, 0.0, 0.0))
+        } else if ((map?.cameraPosition?.zoom ?: 0.0) < 14.0) {
+            lc.zoomWhileTracking(16.0)
+        }
     }
 
     private fun currentLocation(): LatLng? {
@@ -544,6 +558,9 @@ class MainActivity : AppCompatActivity() {
                 map?.locationComponent?.takeIf { it.isLocationComponentActivated }?.let {
                     it.renderMode = RenderMode.GPS
                     it.cameraMode = CameraMode.TRACKING_GPS
+                    // cameraMode değişince eğim/yakınlık sıfırlanır; 2.5D görünümü geri koy.
+                    it.tiltWhileTracking(NAV_TILT)
+                    it.zoomWhileTracking(NAV_ZOOM)
                 }
             }
             val lightInfo = findViewById<TextView>(R.id.light_info)
@@ -630,8 +647,8 @@ class MainActivity : AppCompatActivity() {
         if (!lc.isLocationComponentActivated) return
         lc.renderMode = RenderMode.COMPASS
         lc.cameraMode = CameraMode.TRACKING_COMPASS
-        lc.zoomWhileTracking(17.0)
-        lc.tiltWhileTracking(45.0)
+        lc.zoomWhileTracking(NAV_ZOOM)
+        lc.tiltWhileTracking(NAV_TILT)
         lc.paddingWhileTracking(doubleArrayOf(0.0, mapView.height * 0.4, 0.0, 0.0))
     }
 
@@ -798,5 +815,7 @@ class MainActivity : AppCompatActivity() {
         const val SEARCH_DEBOUNCE_MS = 400L
         const val LOCATION_WAIT_MS = 20_000L
         const val MOVING_SPEED_MPS = 2.5f // ~9 km/sa
+        const val NAV_ZOOM = 17.0         // navigasyonda harita yakınlığı
+        const val NAV_TILT = 50.0         // navigasyonda 2.5D eğim açısı
     }
 }
