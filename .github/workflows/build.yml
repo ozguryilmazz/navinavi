@@ -36,7 +36,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew testDebugUnitTest assembleDebug --stacktrace
           cp app/build/outputs/apk/debug/app-debug.apk "navinavi-${{ github.run_number }}.apk"
 
       - uses: actions/upload-artifact@v5

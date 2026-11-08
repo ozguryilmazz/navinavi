@@ -73,4 +73,5 @@ dependencies {
     implementation(libs.maplibre.android)
     implementation(libs.androidx.car.app)
     implementation(libs.androidx.car.app.projected)
+    testImplementation(libs.junit)
 }

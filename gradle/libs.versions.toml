@@ -6,6 +6,7 @@ material = "1.13.0"
 lifecycle = "2.9.4"
 maplibre = "13.7.1"
 carApp = "1.7.0"
+junit = "4.13.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -15,6 +16,7 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 maplibre-android = { group = "org.maplibre.gl", name = "android-sdk", version.ref = "maplibre" }
 androidx-car-app = { group = "androidx.car.app", name = "app", version.ref = "carApp" }
 androidx-car-app-projected = { group = "androidx.car.app", name = "app-projected", version.ref = "carApp" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
