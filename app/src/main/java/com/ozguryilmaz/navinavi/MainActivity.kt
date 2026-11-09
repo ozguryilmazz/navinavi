@@ -4,8 +4,12 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
 import android.view.WindowManager
 import android.text.InputType
 import android.view.View
@@ -75,6 +79,8 @@ class MainActivity : AppCompatActivity() {
     private var shownLights: List<RouteLight>? = null
     private var navUi = false
     private var movedOnce = false
+    // Mavi noktayı besleyen ham GPS dinleyicisi (varsayılan motor ağ konumu verip kayma yapıyordu).
+    private var dotGps: LocationListener? = null
     private lateinit var startNavButton: Button
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
@@ -277,14 +283,41 @@ class MainActivity : AppCompatActivity() {
         if (!lc.isLocationComponentActivated) {
             lc.activateLocationComponent(
                 LocationComponentActivationOptions.builder(this, s)
-                    .useDefaultLocationEngine(true)
+                    // Varsayılan motor ağ/kaynaşık konum verip mavi noktayı ~40 m kaydırıyordu;
+                    // noktayı aşağıdaki ham GPS dinleyicisiyle kendimiz besliyoruz.
+                    .useDefaultLocationEngine(false)
                     .build()
             )
         }
         lc.isLocationComponentEnabled = true
         // Navigasyon dışında ok pusulayı izler: telefonu çevirince döner.
         lc.renderMode = RenderMode.COMPASS
+        startDotGps()
         if (follow) followMe()
+    }
+
+    /** Mavi noktayı doğrudan ham GPS ile besler; navigasyonla aynı kaynak, kayma olmaz. */
+    @SuppressLint("MissingPermission")
+    private fun startDotGps() {
+        if (dotGps != null || !hasLocationPermission()) return
+        val lm = getSystemService(LocationManager::class.java) ?: return
+        lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.let { pushDot(it) }
+        val listener = LocationListener { loc -> pushDot(loc) }
+        try {
+            lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, listener, Looper.getMainLooper())
+            dotGps = listener
+        } catch (e: Exception) {
+            // İzin yok ya da GPS kapalı.
+        }
+    }
+
+    private fun pushDot(loc: Location) {
+        map?.locationComponent?.takeIf { it.isLocationComponentActivated }?.forceLocationUpdate(loc)
+    }
+
+    private fun stopDotGps() {
+        dotGps?.let { getSystemService(LocationManager::class.java)?.removeUpdates(it) }
+        dotGps = null
     }
 
     /** Kamerayı konuma kilitler; kullanıcı haritayı kaydırınca kilit kendiliğinden açılır. */
@@ -796,13 +829,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     // MapView yaşam döngüsünü kendisi takip etmez; her olayı ona iletmek gerekir.
-    override fun onStart() { super.onStart(); mapView.onStart() }
+    override fun onStart() {
+        super.onStart(); mapView.onStart()
+        if (map?.locationComponent?.isLocationComponentActivated == true) startDotGps()
+    }
     override fun onResume() { super.onResume(); mapView.onResume() }
     override fun onPause() { mapView.onPause(); super.onPause() }
-    override fun onStop() { mapView.onStop(); super.onStop() }
+    override fun onStop() { stopDotGps(); mapView.onStop(); super.onStop() }
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
     // Navigasyon NavigationService'te sürer; ekran kapansa da durmaz.
     override fun onDestroy() {
+        stopDotGps()
         mapView.onDestroy()
         super.onDestroy()
     }
